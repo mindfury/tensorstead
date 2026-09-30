@@ -98,7 +98,7 @@ def test_serve_refuses_listening_off_host_without_tls(
     def fake_run(app: object, **kwargs: object) -> None:
         served.update(kwargs)
 
-    monkeypatch.setattr("tensorstead.cli.coordinator_cmds.uvicorn.run", fake_run)
+    monkeypatch.setattr("uvicorn.run", fake_run)
     monkeypatch.setenv("TENSORSTEAD_MGMT_TOKEN", "test-token")
     result = CliRunner().invoke(
         coordinator_app,
@@ -123,7 +123,7 @@ def test_serve_refuses_an_off_host_bind_with_no_token_even_with_tls(
     def fake_run(app: object, **kwargs: object) -> None:
         served.update(kwargs)
 
-    monkeypatch.setattr("tensorstead.cli.coordinator_cmds.uvicorn.run", fake_run)
+    monkeypatch.setattr("uvicorn.run", fake_run)
     monkeypatch.delenv("TENSORSTEAD_MGMT_TOKEN", raising=False)
     cert, key = tmp_path / "c2.pem", tmp_path / "k2.pem"
     cert.write_text("c\n")
@@ -177,7 +177,7 @@ def test_serve_allows_loopback_with_no_token_given_the_dev_flag(
     def fake_run(app: object, **kwargs: object) -> None:
         served.update(kwargs)
 
-    monkeypatch.setattr("tensorstead.cli.coordinator_cmds.uvicorn.run", fake_run)
+    monkeypatch.setattr("uvicorn.run", fake_run)
     monkeypatch.delenv("TENSORSTEAD_MGMT_TOKEN", raising=False)
 
     result = CliRunner().invoke(
@@ -198,7 +198,7 @@ def test_insecure_dev_mode_does_not_override_the_off_loopback_refusal(
     def fake_run(app: object, **kwargs: object) -> None:
         served.update(kwargs)
 
-    monkeypatch.setattr("tensorstead.cli.coordinator_cmds.uvicorn.run", fake_run)
+    monkeypatch.setattr("uvicorn.run", fake_run)
     monkeypatch.delenv("TENSORSTEAD_MGMT_TOKEN", raising=False)
 
     result = CliRunner().invoke(
@@ -225,7 +225,7 @@ def test_serve_passes_tls_material_to_the_server(
     def fake_run(app: object, **kwargs: object) -> None:
         served.update(kwargs)
 
-    monkeypatch.setattr("tensorstead.cli.coordinator_cmds.uvicorn.run", fake_run)
+    monkeypatch.setattr("uvicorn.run", fake_run)
     monkeypatch.setenv("TENSORSTEAD_MGMT_TOKEN", "test-token")
     cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
     cert.write_text("c\n")

@@ -5,6 +5,16 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [1.0.1] - 2026-09-30
+
+### Fixed
+- `pip install "tensorstead[cli]"` produced a `stead` command that failed on
+  start: the `cli` extra did not declare `httpx`, the HTTP client the CLI is
+  built on, and the CLI imported the coordinator's web server (`uvicorn`) at
+  startup even though only `stead coordinator serve` uses it. Installs with all
+  extras (the Ansible path) were unaffected. CI now installs the built wheel one extra at a time so a
+  missing dependency fails the build.
+
 ## [1.0.0] - 2026-09-30
 
 First public release.
@@ -48,4 +58,5 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.0.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.0

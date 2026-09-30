@@ -5,7 +5,7 @@ test enforces that relationship so the coordinator, agent, package metadata,
 and build records all identify the same release.
 """
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 
 def build_identity() -> dict[str, object]:

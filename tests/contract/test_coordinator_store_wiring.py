@@ -62,7 +62,7 @@ def test_coordinator_serve_passes_store_to_app_builder(
         "build_coordinator_app",
         fake_build_coordinator_app,
     )
-    monkeypatch.setattr(coordinator_cmds.uvicorn, "run", fake_uvicorn_run)
+    monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
     # Unrelated to what this test checks, but serve() now refuses to start
     # with no TENSORSTEAD_MGMT_TOKEN and no --insecure-dev-mode regardless of
     # host.

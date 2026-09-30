@@ -52,7 +52,7 @@ make builds
 Then deploy that build by pointing the artifact at its archived wheel:
 
 ```sh
-make deploy TENSORSTEAD_DEPLOY_ARTIFACT=dist/builds/3/tensorstead-1.0.0-py3-none-any.whl
+make deploy TENSORSTEAD_DEPLOY_ARTIFACT=dist/builds/3/tensorstead-1.0.1-py3-none-any.whl
 ```
 
 The default `make deploy` path is unchanged — it is still the latest build of

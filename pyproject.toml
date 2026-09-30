@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "tensorstead"
-version = "1.0.0"
+version = "1.0.1"
 description = "Inference appliance management system — deterministic, reproducible, inspectable model lifecycle management for inference appliances."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,6 +32,7 @@ agent = [
 cli = [
     "typer>=0.12",
     "rich>=13.0",
+    "httpx>=0.27",
 ]
 mcp = [
     "mcp>=1.0",

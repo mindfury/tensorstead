@@ -1673,7 +1673,7 @@ wheels = [
 
 [[package]]
 name = "tensorstead"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -1690,6 +1690,7 @@ agent = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 cli = [
+    { name = "httpx" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -1722,6 +1723,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'agent'", specifier = ">=0.110" },
     { name = "fastapi", marker = "extra == 'coordinator'", specifier = ">=0.110" },
     { name = "httpx", marker = "extra == 'agent'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'cli'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'coordinator'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'agent'", specifier = ">=0.23" },

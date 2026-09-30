@@ -41,3 +41,29 @@ jobs:
       # Syntax and lint only; contacts no host.
       - name: make ansible-check
         run: make ansible-check
+
+  extras:
+    # Every other job installs all extras at once, which hides an extra that
+    # forgot a dependency. Install the built wheel one extra at a time.
+    name: each extra installs alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Build wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Each extra in isolation
+        run: |
+          wheel="$PWD/$(ls dist/*.whl)"
+          alone() { uv run --no-project --isolated --with "tensorstead[$1] @ file://$wheel" "${@:2}"; }
+          alone cli stead --version
+          alone cli stead --help > /dev/null
+          alone mcp python -c "import tensorstead.mcp.server"
+          alone coordinator python -c "import tensorstead.coordinator.app"
+          alone agent python -c "import tensorstead.agent.app"

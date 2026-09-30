@@ -1,6 +1,6 @@
 ---
 # Copy to an ignored local file and set the wheel path produced by `uv build`.
-tensorstead_package_artifact: /absolute/path/on/controller/tensorstead-1.0.0-py3-none-any.whl
+tensorstead_package_artifact: /absolute/path/on/controller/tensorstead-1.0.1-py3-none-any.whl
 tensorstead_python_executable: /usr/bin/python3.12
 tensorstead_root: /opt/tensorstead
 tensorstead_venv: /opt/tensorstead/venv

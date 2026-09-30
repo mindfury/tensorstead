@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-import uvicorn
 
 from tensorstead.adapters.sqlite.connection import connect
 from tensorstead.adapters.sqlite.migrations import migrate
@@ -131,6 +130,10 @@ def serve(
             "TENSORSTEAD_MGMT_TOKEN is not set. Set it, or pass --insecure-dev-mode "
             "to run an open coordinator on loopback deliberately."
         )
+
+    # Imported here, not at module level: the CLI loads this module for every
+    # command, and a client-only install has no web server to import.
+    import uvicorn
 
     from tensorstead.coordinator.app import build_coordinator_app
 
