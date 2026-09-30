@@ -153,16 +153,25 @@ def test_restarting_container_is_not_reported_as_running(
     )
     container.start()
 
-    observed_restarting = _wait_for(
-        lambda: client.containers.get(container.name).status == "restarting"
-    )
-    if not observed_restarting:
-        pytest.skip("could not catch the container mid-restart on this host")
+    def raw() -> tuple[bool, int]:
+        attrs = client.api.inspect_container(container.name)
+        return bool(attrs["State"].get("Restarting")), int(attrs.get("RestartCount", 0))
 
-    state = engine.inspect_container(container.name)
-
-    assert state is not None
-    assert state.running is False, "a crash-looping container was reported as running"
+    # Checking "restarting" and then inspecting is a race: between the two
+    # calls Docker can relaunch the container for the few milliseconds
+    # `exit 1` takes, and it is then genuinely running. Bracket the engine's
+    # read with raw reads instead -- restarting on both sides with an
+    # unchanged RestartCount proves no relaunch happened in between.
+    for _ in range(100):
+        before_restarting, before_count = raw()
+        state = engine.inspect_container(container.name)
+        after_restarting, after_count = raw()
+        if before_restarting and after_restarting and before_count == after_count:
+            assert state is not None
+            assert state.running is False, "a crash-looping container was reported as running"
+            return
+        time.sleep(0.05)
+    pytest.skip("could not catch the container mid-restart on this host")
 
 
 def test_labels_round_trip_through_the_daemon(engine: DockerEngine, make_container: Any) -> None:
