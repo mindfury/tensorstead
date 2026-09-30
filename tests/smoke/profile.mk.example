@@ -1,0 +1,21 @@
+# Copy this file to .tensorstead/smoke.mk, then replace the paths and host names.
+# It is included by Makefile but ignored by Git. Do not put token values here;
+# name protected local files that contain them instead.
+
+# https once the coordinator serves TLS. The name must match the
+# certificate's subject alternative name, so use the DNS name, not an IP.
+export TENSORSTEAD_SMOKE_API = https://spark-alpha.internal:8080
+export TENSORSTEAD_SMOKE_MGMT_TOKEN_FILE = /absolute/path/to/tensorstead-management-token
+export TENSORSTEAD_SMOKE_DEPLOYMENT = qwen36-27b
+export TENSORSTEAD_SMOKE_MODEL = qwen36-27b
+export TENSORSTEAD_SMOKE_SOURCE_MODEL = nvidia/Qwen3.6-27B-NVFP4
+export TENSORSTEAD_SMOKE_EXPECTED_NODES = spark-alpha.internal,spark-beta.internal
+export TENSORSTEAD_SMOKE_INFERENCE_URL = http://spark-alpha.internal:8000
+export TENSORSTEAD_SMOKE_INFERENCE_API_KEY_FILE = ~/.local/share/tensorstead/inference-api-key
+export TENSORSTEAD_SMOKE_EXPECTED_REPLY = Tensorstead smoke test passed.
+
+# Hosted Streamable HTTP MCP endpoint and the managed private CA that signs it.
+# The CA bundle is a public certificate, not a secret, but it lives outside the
+# repository so that the trust anchor stays with the operator's installation.
+export TENSORSTEAD_SMOKE_MCP_URL = https://spark-alpha.internal:8090/mcp
+export TENSORSTEAD_SMOKE_MCP_CA_FILE = ~/.local/share/tensorstead/ansible-tls/ca.pem

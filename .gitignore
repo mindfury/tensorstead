@@ -1,0 +1,56 @@
+# Python / uv
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+build/
+dist/
+*.whl
+*.so
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv/
+uv.lock.lock
+
+# Universal
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.log
+
+# Editors
+.vscode/
+.idea/
+
+# Local secrets / env (never committed)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local Ansible inventory, vars, and vault (never committed)
+ansible/inventories/local/
+
+# mutmut's generated mutant sandbox
+mutants/
+.mutmut-cache
+
+# Project-specific
+.claude/
+/.tensorstead/
+# Default store of a local `stead coordinator init` evaluation.
+/tensorstead.db
+/tensorstead.db-*
+
+# Build identity, generated into the package at build time by
+# scripts/build_package.py and removed again immediately after.
+src/tensorstead/_build.py

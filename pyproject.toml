@@ -1,0 +1,165 @@
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "tensorstead"
+version = "1.0.0"
+description = "Inference appliance management system — deterministic, reproducible, inspectable model lifecycle management for inference appliances."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Philip Lincoln" }]
+dependencies = [
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+coordinator = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+]
+agent = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "docker>=7.0",
+    "huggingface_hub>=0.23",
+    "nvidia-ml-py>=12.0",
+]
+cli = [
+    "typer>=0.12",
+    "rich>=13.0",
+]
+mcp = [
+    "mcp>=1.0",
+    "httpx>=0.27",
+]
+dev = [
+    "ansible-core>=2.17",
+    "ansible-lint>=24.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "vulture>=2.11",
+]
+
+[tool.uv]
+package = true
+
+[project.scripts]
+stead = "tensorstead.cli.main:app"
+# The MCP server is its own process. It is an HTTP client of the
+# coordinator API, so it can run anywhere reachable — including, but never
+# requiring, the coordinator host.
+tensorstead-mcp = "tensorstead.mcp.server:main"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+exclude = [".git", ".venv", "dist", "build", "mutants"]
+force-exclude = true
+
+[tool.ruff.lint]
+# ARG and S were added after an audit found parameters accepted and silently
+# discarded, and a security control that was documented but never executed.
+# B already carries B018 (useless expression), which is what catches a bare
+# attribute access standing in for a check -- though not the `_ = x` form, so
+# tests/contract/test_no_silent_noops.py covers that gap.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC", "ARG", "S"]
+ignore = ["RUF012"]  # mutable class defaults handled explicitly in phase 2+ models
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, and carry obvious non-secret fixtures.
+# Test doubles implement real signatures; an unused parameter in a fake is
+# the point, not an oversight. S104 covers deliberate 0.0.0.0 test inputs.
+"tests/**" = ["S101", "S104", "S105", "S106", "S108", "S603", "S607", "S608", "ARG001", "ARG002", "ARG005"]
+# FastAPI hands every handler `request`/`exc` whether or not it reads them; the
+# signature is the framework's, not a discarded argument.
+"src/tensorstead/coordinator/app.py" = ["ARG001"]
+"src/tensorstead/coordinator/routes/__init__.py" = ["ARG001"]
+"src/tensorstead/agent/routes/*.py" = ["ARG001"]
+# systemctl is invoked by absolute operation, not shell, and is the documented
+# integration point.
+"src/tensorstead/agent/service_manager/systemd.py" = ["S603", "S607"]
+# Hand-written SQL is confined to this adapter by design.
+"src/tensorstead/adapters/sqlite/repository.py" = ["S608"]
+# Controller-side build tooling invokes uv/git deliberately, not user input.
+"scripts/*.py" = ["S603", "S607"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_untyped_calls = true
+strict_optional = true
+exclude = ["build", "dist"]
+
+# The platform-neutral core domain is held to the strictest standard.
+# Everything else builds to a high bar; the domain leaves no slack.
+[[tool.mypy.overrides]]
+module = "tensorstead.domain.*"
+disallow_any_generics = true
+disallow_any_unimported = true
+no_implicit_reexport = true
+warn_unreachable = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "unit: fast, no I/O, no fakes (default tier)",
+    "contract: cross-artifact/API contract tests, fakes only",
+    "integration: cross-component tests, real local Docker, no GPU",
+    "hardware: real hardware, requires --hardware opt-in",
+    "hardware_disruptive: disruptive hardware tests, requires --hardware-disruptive opt-in",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/tensorstead"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# A floor, not a target. It exists so the number cannot silently fall: an
+# audit found several code paths that no test had ever executed, including a
+# certificate-pinning function that was called in production and never in a
+# test. Raise this when it is comfortably exceeded; never lower it to make a
+# change pass. Branch coverage is on, so this number is stricter than a
+# line-coverage figure and is not comparable to one.
+fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+
+[tool.mutmut]
+# Scoped to the layers where a wrong constant is a wrong product decision.
+# Mutation testing is the only tool that finds "this value is never asserted" —
+# coverage reports these lines as covered.
+# The whole package must be copied or the mutant sandbox cannot import it;
+# mutation is still judged by the fast unit+contract tiers.
+source_paths = ["src/tensorstead"]
+# Unit tier only: contract tests assert on repository file paths, which do
+# not exist inside mutmut's sandbox copy.
+pytest_add_cli_args_test_selection = ["tests/unit"]

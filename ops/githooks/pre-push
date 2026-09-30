@@ -1,0 +1,83 @@
+#!/bin/sh
+# Run the full local gate before anything reaches the git host.
+#
+# This is the real CI. There is no build server: `origin` is a bare repository
+# on the git host reached over SSH, so the last place a check can run before a
+# commit becomes shared history is here, on push.
+#
+# `make check` is lint + typecheck + tests + coverage, about 90 seconds. That is
+# the right price for a push and the wrong price for a commit, which is why the
+# formatting half runs in pre-commit instead.
+#
+# `make ansible-check` runs only when the push actually carries ansible/
+# changes, since ansible-lint is the slow part and most pushes do not touch it.
+#
+# Bypass: TENSORSTEAD_SKIP_HOOKS=1 git push ...     (or --no-verify)
+# Use it for a findings-only push when the estate is on fire. Then run
+# `make check` afterwards, because the next person to run it inherits whatever
+# you skipped.
+
+[ -n "$TENSORSTEAD_SKIP_HOOKS" ] && exit 0
+
+export PYTHONPATH=
+
+ZERO=$(git hash-object --stdin </dev/null | tr '[:digit:][:lower:]' '0')
+ansible_touched=0
+have_work=0
+
+# git feeds one line per ref being pushed: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ "$local_sha" = "$ZERO" ] && continue   # a deletion pushes no code
+    have_work=1
+    if [ "$remote_sha" = "$ZERO" ]; then
+        ansible_touched=1                     # new branch: no range to diff, so be safe
+    elif [ -n "$(git diff --name-only "$remote_sha" "$local_sha" -- ansible/ 2>/dev/null)" ]; then
+        ansible_touched=1
+    fi
+done
+
+[ "$have_work" = 0 ] && exit 0
+
+# The gate runs against the working tree, which is only the same thing as the
+# commits being pushed when the tree is clean. Say so rather than implying a
+# guarantee that was not checked -- reporting a check as stronger than it was is
+# the failure this repository is built around.
+if [ -n "$(git status --porcelain)" ]; then
+    echo "pre-push: working tree is dirty; the gate below tests the tree, not exactly what you are pushing."
+fi
+
+echo "pre-push: make check"
+if ! make check; then
+    echo
+    echo "pre-push: refused -- make check failed."
+    exit 1
+fi
+
+if [ "$ansible_touched" = 1 ]; then
+    echo "pre-push: ansible/ changed -- make ansible-check"
+    # Output goes to a file, not straight to the terminal, and the reason is
+    # not cosmetic: git hands hooks *non-blocking* stdout and stderr, and
+    # Ansible refuses to start on them --
+    #
+    #   ERROR: Ansible requires blocking IO on stdin/stdout/stderr.
+    #          Non-blocking file handles detected: <stdout>, <stderr>
+    #
+    # so every ansible-touching push failed the gate for a reason that had
+    # nothing to do with the change. A regular file is always blocking, which
+    # is the whole fix. Redirecting stdin too, since ansible checks all three.
+    #
+    # This branch had never run until the first push that touched ansible/,
+    # which is why the hook shipped looking fine: an untested path in a gate is
+    # a gate that has not been tested.
+    log=$(mktemp -t tensorstead-ansible-check.XXXXXX) || exit 1
+    if make ansible-check >"$log" 2>&1 </dev/null; then
+        rm -f "$log"
+    else
+        echo
+        tail -40 "$log"
+        rm -f "$log"
+        echo
+        echo "pre-push: refused -- make ansible-check failed."
+        exit 1
+    fi
+fi

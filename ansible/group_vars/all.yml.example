@@ -1,0 +1,52 @@
+---
+# Copy to an ignored local file and set the wheel path produced by `uv build`.
+tensorstead_package_artifact: /absolute/path/on/controller/tensorstead-1.0.0-py3-none-any.whl
+tensorstead_python_executable: /usr/bin/python3.12
+tensorstead_root: /opt/tensorstead
+tensorstead_venv: /opt/tensorstead/venv
+tensorstead_config_dir: /etc/tensorstead
+tensorstead_service_user: tensorstead
+tensorstead_coordinator_bind_host: 0.0.0.0
+tensorstead_coordinator_port: 8080
+tensorstead_mcp_bind_host: 0.0.0.0
+tensorstead_mcp_port: 8090
+tensorstead_mcp_path: /mcp
+tensorstead_coordinator_store: /var/lib/tensorstead/coordinator/tensorstead.db
+tensorstead_coordinator_credentials_dir: /var/lib/tensorstead/coordinator/credentials
+tensorstead_agent_bind_host: 0.0.0.0
+tensorstead_agent_port: 8443
+tensorstead_agent_model_store: /var/lib/tensorstead/models
+tensorstead_agent_image_store: /var/lib/tensorstead/images
+tensorstead_agent_state_dir: /var/lib/tensorstead/state
+# A random inference API key is generated here on the controller during the
+# first normal site.yml run. It is not an Ansible Vault value and is never
+# committed to the repository.
+tensorstead_inference_api_key_path: "{{ lookup('env', 'HOME') }}/.local/share/tensorstead/inference-api-key"
+# Normal mode: Ansible creates private TLS trust automatically. The controller
+# keeps its private CA key outside this repository; agent private keys stay on
+# their agent. Set false only for an existing organization certificate setup.
+tensorstead_managed_tls: true
+tensorstead_managed_tls_controller_dir: "{{ lookup('env', 'HOME') }}/.local/share/tensorstead/ansible-tls"
+tensorstead_agent_tls_server_name: "{{ inventory_hostname }}"
+# Advanced override paths when tensorstead_managed_tls is false.
+tensorstead_agent_ca_bundle: /etc/tensorstead/ca.pem
+tensorstead_agent_tls_cert: /etc/tensorstead/agent.crt
+tensorstead_agent_tls_key: /etc/tensorstead/agent.key
+# Define these in an Ansible Vault-encrypted local file, never here:
+# tensorstead_management_token: ...
+# tensorstead_replication_token: ...
+
+# Whether a node may arrange for deployments to restart on boot. **Default
+# false, and this is the only place it can be set.**
+#
+# The deployment's own `restore_on_boot` flag says which deployments want
+# persistence; this says whether the node permits any. Two keys for one
+# capability, held by different parties: a management token sets the first, and
+# only `make deploy` -- with your Vault and become passwords -- sets this one.
+# An agent can turn the first and can never reach this.
+#
+# What is being gated: an unconditional boot-restoration arrangement turned an
+# NVIDIA driver deadlock into a node that returned to the same deadlock on every
+# reboot, and then into a reimage. Set this true for a node only once you are
+# willing for it to start inference workloads before anyone can log in.
+tensorstead_allow_boot_restoration: false

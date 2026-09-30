@@ -1,0 +1,354 @@
+---
+# Depends on no Ansible collection beyond ansible.builtin. This role runs
+# against machines that have just been reimaged, often in a hurry; requiring
+# `ansible-galaxy collection install` first is one more thing to remember at
+# exactly the wrong moment.
+#
+# Ordered validate -> converge -> verify, and the ordering is load-bearing. An
+# earlier version checked the fabric last, so a node that was not ready received
+# twelve changes before anything said so. Everything that can refuse now refuses
+# while the machine is still untouched.
+#
+# **This role does not write to /etc/netplan.** That directory belongs to NVIDIA
+# Sync, which enforces the claim: Cluster Assistant renames competing files to
+# `.sync-disabled-<timestamp>` and journals the fact in a manifest. See the MTU
+# section for what that cost.
+
+# =========================================================== 1. PRECONDITIONS
+# Read-only. Nothing in this block changes the machine.
+
+- name: Require a declared fabric address for this node
+  ansible.builtin.assert:
+    that:
+      - node_prepare_fabric_address is defined
+      - node_prepare_fabric_address | length > 0
+    fail_msg: |-
+      {{ inventory_hostname }} has no node_prepare_fabric_address. Add it to this
+      host's inventory entry, e.g. node_prepare_fabric_address: 10.100.88.1/24
+      Declared rather than derived: an address computed from inventory order
+      would renumber the fabric the day someone sorts the file.
+
+- name: Resolve per-host facts this role derives from
+  ansible.builtin.set_fact:
+    node_prepare_user: "{{ ansible_user | default(ansible_facts['user_id']) }}"
+    node_prepare_fabric_ip: "{{ node_prepare_fabric_address.split('/')[0] }}"
+    # A real boolean. `when: node_prepare_fabric_mtu` reads naturally and is
+    # wrong -- the value is an int and Ansible requires a bool, so every site
+    # using it failed at run time. Neither --syntax-check nor ansible-lint
+    # evaluates conditionals, so only a real run finds that class.
+    node_prepare_manage_mtu: "{{ (node_prepare_fabric_mtu | default(0) | int) > 0 }}"
+
+- name: Read this node's service states
+  ansible.builtin.service_facts:
+
+- name: Assert Docker is present and running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services['docker.service'] is defined
+      - ansible_facts.services['docker.service'].state | default('') == 'running'
+    fail_msg: |-
+      Docker is not running here. Tensorstead runs every runtime through it, and a
+      later task adds the deploying user to a `docker` group that may not exist
+      -- failing with a message about a group rather than the thing missing.
+    success_msg: >-
+      Docker is running
+      ({{ ansible_facts.services['docker.service'].status | default('?') }} at boot).
+
+- name: Look for NVIDIA Sync's cluster configuration
+  ansible.builtin.stat:
+    path: /etc/netplan/99-nvidia-sync-cluster.yaml
+  become: true
+  register: node_prepare_sync_cluster
+
+- name: Assert NVIDIA Sync's Cluster Assistant has configured this node
+  ansible.builtin.assert:
+    that:
+      - node_prepare_sync_cluster.stat.exists
+    fail_msg: |-
+      /etc/netplan/99-nvidia-sync-cluster.yaml is absent, so Cluster Assistant
+      has not run on this node and the ConnectX-7 fabric is unconfigured. Run it
+      in NVIDIA Sync first, then re-run this play.
+
+      Checked before anything changes, and deliberately not worked around. Sync
+      owns the fabric outright: it picks the subnet, writes that file, and
+      disables competing netplan configuration. Preparing a node without it is
+      work that has to be redone.
+    success_msg: Cluster Assistant has configured the fabric.
+
+- name: Read the fabric interface's addresses
+  ansible.builtin.command:
+    cmd: "ip -o -4 addr show dev {{ node_prepare_fabric_interface }}"
+  register: node_prepare_fabric_state
+  changed_when: false
+  failed_when: false
+
+- name: Assert the fabric interface carries the declared address
+  ansible.builtin.assert:
+    that:
+      - node_prepare_fabric_state.rc == 0
+      - node_prepare_fabric_ip in node_prepare_fabric_state.stdout
+    fail_msg: |-
+      {{ node_prepare_fabric_interface }} does not carry {{ node_prepare_fabric_ip }}.
+      It currently carries: {{ node_prepare_fabric_state.stdout | trim | default('nothing') }}
+      If an address is shown, the fabric is fine and this node's declared
+      node_prepare_fabric_address is stale. Sync picks a new subnet whenever a
+      cluster is created and does not reuse the previous one, so a cluster
+      rebuild changes these. Update the inventory to match.
+      If nothing is shown, the interface was renamed or the QSFP cable is in the
+      other port; `ibdev2netdev` maps ports to names, and one physical port
+      presents as two Linux interfaces on this hardware.
+    success_msg: >-
+      Fabric is up on {{ node_prepare_fabric_interface }} at
+      {{ node_prepare_fabric_ip }}.
+
+- name: Read this node's EFI boot entries
+  ansible.builtin.command:
+    cmd: efibootmgr -v
+  become: true
+  register: node_prepare_efibootmgr
+  changed_when: false
+  failed_when: false
+
+- name: Assert the boot entry goes through shim so GRUB is reachable
+  ansible.builtin.assert:
+    that:
+      - "'shimaa64.efi' in node_prepare_efibootmgr.stdout"
+    fail_msg: |-
+      This node's EFI boot entry does not go through shimaa64.efi, so GRUB never
+      runs and no key combination produces a menu. That is the state spark-alpha
+      was in when it became unrecoverable. Repair by hand with efibootmgr -c
+      pointing at \EFI\ubuntu\shimaa64.efi, checking the device against lsblk
+      first. Not repaired automatically: rewriting boot entries on a machine
+      that currently boots is a good way to own one that does not.
+    success_msg: GRUB is in the boot chain; a rescue menu is reachable.
+  when: node_prepare_efibootmgr.rc == 0
+
+- name: Read the firmware boot-menu timeout
+  ansible.builtin.set_fact:
+    node_prepare_firmware_timeout: "{{ node_prepare_efibootmgr.stdout | regex_search('Timeout:[ ]*([0-9]+)', '\\1') | first | default(-1) | int }}"
+  when: node_prepare_efibootmgr.rc == 0
+
+# ============================================================== 2. CONVERGE
+# Everything below changes the machine. Nothing above did.
+
+- name: Ensure the deploying user has an .ssh directory
+  ansible.builtin.file:
+    path: "~{{ node_prepare_user }}/.ssh"
+    state: directory
+    owner: "{{ node_prepare_user }}"
+    mode: '0700'
+  become: true
+  when: node_prepare_authorized_keys | length > 0
+
+- name: Install authorized keys for the deploying user
+  ansible.builtin.lineinfile:
+    path: "~{{ node_prepare_user }}/.ssh/authorized_keys"
+    line: "{{ lookup('file', item) | trim }}"
+    create: true
+    owner: "{{ node_prepare_user }}"
+    mode: '0600'
+  loop: "{{ node_prepare_authorized_keys }}"
+  become: true
+  when: node_prepare_authorized_keys | length > 0
+  # Appends. NVIDIA Sync installs its own key here, and `exclusive` or a
+  # templated file would silently remove it along with the inter-node keys
+  # Cluster Assistant sets up for the cluster itself.
+
+- name: Add the deploying user to the docker group
+  ansible.builtin.user:
+    name: "{{ node_prepare_user }}"
+    groups: docker
+    # `append` is the entire point. `usermod -G docker` *replaces* a user's
+    # supplementary groups, which on this estate removed `sudo` from the
+    # operator's own account on a live machine. Ansible's module defaults to
+    # replacing as well, so this is stated rather than left to the default.
+    append: true
+  become: true
+
+- name: Grant passwordless sudo to the deploying user
+  ansible.builtin.copy:
+    content: "{{ node_prepare_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    dest: /etc/sudoers.d/tensorstead-operator
+    owner: root
+    group: root
+    mode: '0440'
+    # Validated before installation. A malformed sudoers file locks the machine
+    # out of root; without this the role would be a way to do that to every node
+    # at once.
+    validate: /usr/sbin/visudo -cf %s
+  become: true
+  when: node_prepare_passwordless_sudo | bool
+
+- name: Remove passwordless sudo when it is not requested
+  ansible.builtin.file:
+    path: /etc/sudoers.d/tensorstead-operator
+    state: absent
+  become: true
+  when: not (node_prepare_passwordless_sudo | bool)
+
+- name: Read the current default systemd target
+  ansible.builtin.command:
+    cmd: systemctl get-default
+  register: node_prepare_default_target
+  changed_when: false
+
+- name: Boot to a text console rather than a desktop
+  ansible.builtin.command:
+    cmd: systemctl set-default multi-user.target
+  become: true
+  changed_when: true
+  register: node_prepare_target_changed
+  when:
+    - node_prepare_headless_boot | bool
+    - node_prepare_default_target.stdout | trim != 'multi-user.target'
+
+- name: Keep the journal across reboots
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: "^#?Storage="
+    line: "Storage=persistent"
+  become: true
+  when: node_prepare_journal_persistent | bool
+  notify: Restart journald
+
+- name: Make the GRUB menu visible
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: "^#?{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+  loop:
+    - {key: GRUB_TIMEOUT_STYLE, value: menu}
+    - {key: GRUB_TIMEOUT, value: "{{ node_prepare_grub_timeout }}"}
+  become: true
+  when: node_prepare_grub_menu | bool
+  notify: Regenerate GRUB configuration
+
+# --------------------------------------------------------------- fabric MTU
+# Sync leaves the MTU at the 1500 default: its cluster config sets addresses and
+# nothing else. So the MTU is ours to own -- provided we own it somewhere Sync
+# does not police.
+
+- name: Declare the fabric MTU as a device property
+  ansible.builtin.template:
+    src: 10-tensorstead-fabric.link.j2
+    dest: /etc/systemd/network/10-tensorstead-fabric.link
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  vars:
+    node_prepare_fabric_mac: "{{ ansible_facts[node_prepare_fabric_interface]['macaddress'] }}"
+  when: node_prepare_manage_mtu | bool
+
+- name: Remove the MTU declaration when it is not wanted
+  ansible.builtin.file:
+    path: /etc/systemd/network/10-tensorstead-fabric.link
+    state: absent
+  become: true
+  when: not (node_prepare_manage_mtu | bool)
+
+- name: Apply the fabric MTU to the running interface
+  ansible.builtin.command:
+    cmd: "ip link set dev {{ node_prepare_fabric_interface }} mtu {{ node_prepare_fabric_mtu }}"
+  become: true
+  changed_when: true
+  # The .link governs the *next* device initialisation; this makes the running
+  # interface match now. Both, because either alone leaves declared and observed
+  # disagreeing -- which is precisely how the previous version reported success
+  # for an MTU that would not have survived a reboot.
+  when:
+    - node_prepare_manage_mtu | bool
+    - ansible_facts[node_prepare_fabric_interface]['mtu'] | int != node_prepare_fabric_mtu | int
+
+- name: Record every node's fabric address in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^[0-9.]+[ \t]+{{ hostvars[item].inventory_hostname_short }}-fabric$"
+    line: >-
+      {{ hostvars[item].node_prepare_fabric_address.split('/')[0] }}
+      {{ hostvars[item].inventory_hostname_short }}-fabric
+  loop: "{{ ansible_play_hosts_all }}"
+  when: hostvars[item].node_prepare_fabric_address is defined
+  become: true
+
+- name: Keep unattended upgrades away from the kernel and the driver
+  ansible.builtin.template:
+    src: 51tensorstead-kernel-blacklist.j2
+    dest: /etc/apt/apt.conf.d/51tensorstead-kernel-blacklist
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: node_prepare_hold_kernel_and_driver | bool
+
+- name: Remove the upgrade blacklist when it is not wanted
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/51tensorstead-kernel-blacklist
+    state: absent
+  become: true
+  when: not (node_prepare_hold_kernel_and_driver | bool)
+
+# ================================================================ 3. VERIFY
+
+- name: Flush handlers before verifying what they changed
+  ansible.builtin.meta: flush_handlers
+
+- name: Read the fabric MTU
+  ansible.builtin.command:
+    cmd: "cat /sys/class/net/{{ node_prepare_fabric_interface }}/mtu"
+  register: node_prepare_fabric_mtu_observed
+  changed_when: false
+  failed_when: false
+
+- name: Confirm the MTU declaration is present, not merely the value
+  ansible.builtin.stat:
+    path: /etc/systemd/network/10-tensorstead-fabric.link
+  become: true
+  register: node_prepare_link_file
+  when: node_prepare_manage_mtu | bool
+
+- name: Assert the fabric MTU is both declared and applied
+  ansible.builtin.assert:
+    that:
+      - node_prepare_fabric_mtu_observed.stdout | trim | int == node_prepare_fabric_mtu | int
+      - node_prepare_link_file.stat.exists
+    fail_msg: |-
+      MTU is {{ node_prepare_fabric_mtu_observed.stdout | trim }}, declared {{ node_prepare_fabric_mtu }};
+      declaration present: {{ node_prepare_link_file.stat.exists | default(false) }}.
+      Both are asserted deliberately. The previous version checked only the
+      running value and reported success while the file producing it had been
+      disabled by Cluster Assistant -- an MTU that would have reverted at the
+      next reboot with nothing saying so.
+    success_msg: >-
+      MTU {{ node_prepare_fabric_mtu }} applied, and declared in
+      /etc/systemd/network/10-tensorstead-fabric.link.
+  when: node_prepare_manage_mtu | bool
+
+- name: Check for pending OS updates without applying any
+  ansible.builtin.apt:
+    upgrade: dist
+  become: true
+  check_mode: true
+  register: node_prepare_pending
+  failed_when: false
+  when: node_prepare_report_updates | bool
+
+- name: Summarise state and what this role cannot reach
+  ansible.builtin.debug:
+    # A `|-` block: a source line break is an output line break. Each line is
+    # one complete statement, kept under the 160-character lint limit by saying
+    # less, which a status line should be doing anyway.
+    msg: |-
+      Kernel {{ ansible_facts['kernel'] }} on {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
+      Fabric {{ node_prepare_fabric_interface }} at {{ node_prepare_fabric_ip }}, MTU {{ node_prepare_fabric_mtu_observed.stdout | trim | default('?') }}.
+      {% if (node_prepare_firmware_timeout | default(-1) | int) >= 0 and (node_prepare_firmware_timeout | int) < (node_prepare_min_firmware_timeout | int) %}
+      Firmware boot-menu timeout {{ node_prepare_firmware_timeout }}s, below the {{ node_prepare_min_firmware_timeout }}s wanted.
+      GRUB holds its own menu for {{ node_prepare_grub_timeout }}s, so this is convenience, not the escape hatch. Raise it in UEFI when convenient.
+      {% endif %}
+      {% if node_prepare_report_updates | bool and node_prepare_pending.changed | default(false) %}
+      OS updates pending, not applied. Kernel and driver are also blocked from unattended upgrade: the deadlock lives in 6.17.
+      {% endif %}
+      Remaining per node, unreachable from the OS: in UEFI set Force boot to Grub menu = Enabled.
+      {% if node_prepare_target_changed is changed %}
+      A reboot is required for the text-console default to take effect.
+      {% endif %}

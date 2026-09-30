@@ -1,0 +1,50 @@
+---
+# Bring a freshly reimaged DGX Spark to the state Tensorstead expects.
+#
+# Runs *before* site.yml and is independent of it: this prepares the machine,
+# site.yml installs the product. Keeping them apart matters because the machine
+# preparation is what you need when the product is not installed, which is
+# exactly the situation a reimage leaves you in.
+#
+#   make prepare-nodes
+#
+# **Bootstrap first on a freshly reimaged node.** A reimage empties
+# authorized_keys, and the inventory names a key that is therefore not yet
+# installed -- so the playbook that installs keys cannot authenticate with the
+# key it installs. Break the loop once, with your password:
+#
+#   ssh-copy-id -i ~/.ssh/<deploy-key>.pub <user>@<host>
+#
+# Inherent rather than an oversight: any key-management automation has to be let
+# in the first time by something other than itself. Recorded here because the
+# failure it produces -- "Permission denied (publickey,password)" at Gathering
+# Facts -- reads like a broken playbook rather than a missing handshake.
+#
+# Idempotent, so re-running after any reimage is one command rather than a
+# recollection. That is the whole point: this list was being rebuilt from memory
+# every time, and on 2026-08-15 it was rebuilt wrong -- `usermod -G docker`
+# instead of `-aG` removed the operator's own sudo group on a live node.
+#
+# What it deliberately does not do: apply OS updates, set NCCL environment
+# (Tensorstead owns that), or rewrite EFI boot entries. Each is argued at the
+# point it is skipped.
+- name: Prepare DGX Spark nodes
+  hosts: tensorstead_agents
+  gather_facts: true
+  roles:
+    - node_prepare
+
+# A second play, and the boundary is the point rather than an organisational
+# preference. Ansible converges hosts in parallel, so a node reaching a
+# peer-to-peer check inside the first play could test a peer that has not
+# applied its own configuration yet -- failing against a fabric that was about
+# to be fine. Every host completes a play before any host begins the next, so
+# this is a real barrier where retries would only have been optimism.
+- name: Verify the fabric end to end
+  hosts: tensorstead_agents
+  gather_facts: false
+  tasks:
+    - name: Check jumbo frames reach every peer
+      ansible.builtin.include_role:
+        name: node_prepare
+        tasks_from: verify_fabric

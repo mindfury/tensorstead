@@ -1,0 +1,21 @@
+-- A node can be declared reserved, independent of anything running on it.
+--
+-- ComfyUI running standalone on spark-alpha (outside Tensorstead, on purpose)
+-- is invisible to the insufficient_memory guard by
+-- construction: that guard reads live accelerator/host memory, and a
+-- standalone container's usage shows up there same as anything else's, but
+-- only at the moment a start is attempted. A model acquired onto a reserved
+-- node, or a deployment created there, would not fail until someone actually
+-- tried to start it -- after the acquisition's time and bandwidth were
+-- already spent.
+--
+-- This is a declared fact, not an observation, and deliberately not the
+-- no-scheduling rule's business: it never chooses a node for the
+-- operator, it only lets them say "not this one" and have every entry point
+-- (create, modify, start) honour it before doing real work.
+--
+-- DEFAULT 0 is the point, matching restore_on_boot's own precedent: every
+-- node that predates this column is unreserved, which is the only default
+-- that does not silently block deployments nobody asked to block.
+ALTER TABLE nodes ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE nodes ADD COLUMN reserved_reason TEXT NOT NULL DEFAULT '';

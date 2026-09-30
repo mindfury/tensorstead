@@ -1,0 +1,20 @@
+// Managed by Tensorstead (ansible/roles/node_prepare). Edits are overwritten.
+//
+// Keeps *unattended* upgrades away from the kernel and the NVIDIA driver.
+// Deliberate upgrades are unaffected: `apt upgrade` still takes these, which is
+// the point -- updates should happen when someone is watching and a GRUB menu
+// is reachable, not overnight.
+//
+// The driver deadlock that cost a node lives in 6.17.0-1029-nvidia, and an
+// unattended kernel bump is the most plausible explanation for the EFI boot
+// entry found broken on that same machine.
+//
+// Pattern-matched rather than `apt-mark hold` on named packages: the exact
+// package names on DGX OS are something this role would be guessing at, and a
+// hold list that misses the real package is worse than no hold at all, because
+// it looks like cover.
+Unattended-Upgrade::Package-Blacklist {
+{% for pattern in node_prepare_unattended_blacklist %}
+    "{{ pattern }}";
+{% endfor %}
+};

@@ -1,0 +1,67 @@
+---
+- name: Create agent managed directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - "{{ tensorstead_agent_model_store }}"
+    - "{{ tensorstead_agent_image_store }}"
+    - "{{ tensorstead_agent_state_dir }}"
+# Durable compile cache. Without this root the agent's
+# per-deployment mkdir fails, and the failure is silent by design -- the
+# deployment starts without a cache and recompiles -- so the directory has
+# to exist for the feature to do anything at all.
+#
+# Defaulted at the point of use rather than required. Operator inventories
+# live outside this repository, so a variable introduced by a new feature
+# must not be mandatory: requiring it would fail the next deploy on a host
+# that was working fine, which is a self-inflicted outage during an
+# upgrade. An inventory that sets it still wins.
+    - "{{ tensorstead_agent_cache_path | default('/var/lib/tensorstead/cache') }}"
+
+- name: Configure agent environment
+  ansible.builtin.template:
+    src: agent.env.j2
+    dest: "{{ tensorstead_config_dir }}/agent.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  notify: Restart tensorstead agent
+
+- name: Install agent systemd unit
+  ansible.builtin.template:
+    src: tensorstead-agent.service.j2
+    dest: /etc/systemd/system/tensorstead-agent.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart tensorstead agent
+
+# Whether the control plane comes back by itself after a reboot.
+#
+# Off by default, by operator decision. The wedge
+# there was *deployment* boot restoration, not this -- and the two are worth
+# keeping straight: the product does nothing when idle, so
+# a coordinator or agent that starts at boot cannot start a model on its
+# own. Disabling this prevents nothing the wedge describes.
+#
+# It is off anyway, and the reason is narrower than that: a control plane
+# that is not running cannot be *told* to start anything either -- not by a
+# stray automation, not by an operator agent acting on a stale plan. This
+# estate has had a watcher stop a healthy deployment five seconds after it
+# started. "Nothing comes up until a human says so" is a posture, and this
+# is the switch for it.
+#
+# Converges in both directions: set it true and a deploy re-enables. That
+# matters because the alternative -- a deploy that only ever enables -- is
+# how a disabled unit quietly comes back and the record stops matching.
+- name: Start the agent, and set whether it starts at boot
+  ansible.builtin.systemd_service:
+    name: tensorstead-agent
+    enabled: "{{ tensorstead_services_enabled_at_boot | default(false) | bool }}"
+    state: started
+    daemon_reload: true

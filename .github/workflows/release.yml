@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # A tag that disagrees with the package version would publish a wheel
+      # whose filename contradicts its release page.
+      - name: Tag matches package version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          test "${GITHUB_REF_NAME}" = "v${version}" || {
+            echo "tag ${GITHUB_REF_NAME} does not match pyproject version ${version}"
+            exit 1
+          }
+
+      - name: Install
+        run: uv sync --all-extras --locked
+
+      - name: make check
+        run: make check
+
+      # Builds the wheel and sdist and writes the SHA-256 provenance manifest.
+      - name: make build
+        run: make build
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/        { exit }
+            on                    { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md || { echo "no CHANGELOG.md entry for $version"; exit 1; }
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Tensorstead ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            dist/*.whl dist/*.tar.gz dist/*.build.json

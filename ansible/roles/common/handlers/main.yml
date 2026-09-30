@@ -1,0 +1,26 @@
+---
+# Fired when a new wheel is installed. Every long-running Tensorstead service
+# must be listed here: one absent from this loop keeps running the code it
+# loaded at its last restart, while the deploy reports success.
+#
+# The hosted MCP service was absent, so from the moment it was introduced every
+# release left it serving stale code. Neither `make deploy` nor `make
+# readiness` noticed; the smoke suite's live parity check did, by
+# observing that the deployed endpoint published five fewer tools than the
+# installed wheel contained.
+- name: Restart Tensorstead services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: restarted
+    daemon_reload: true
+  # Only units this host has: a coordinator-only service does not exist on an
+  # agent-only host, and its absence there is not a failure.
+  when: item + '.service' in ansible_facts.services
+  loop:
+    - tensorstead-coordinator
+    - tensorstead-agent
+    - tensorstead-mcp
+  # No blanket error suppression here. Ignoring the result made a restart that
+  # genuinely failed indistinguishable from one that worked -- the same fault
+  # as the missing service, and with the same symptom: a deploy that reports
+  # success while the estate is not what it claims.

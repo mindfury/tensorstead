@@ -1,0 +1,29 @@
+# Copy this to .tensorstead/deploy.mk, then correct the paths.
+# It is included by Makefile and ignored by Git.
+#
+# These are PATHS ONLY. No secret value belongs here: the Vault file stays
+# encrypted, and its password (and your sudo password) are prompted for at
+# deploy time, never stored.
+
+export TENSORSTEAD_INVENTORY = $(HOME)/.config/tensorstead/hosts.yml
+export TENSORSTEAD_SETTINGS  = $(HOME)/.config/tensorstead/tensorstead-settings.yml
+export TENSORSTEAD_VAULT     = $(HOME)/.config/tensorstead/tensorstead-vault.yml
+
+# Optional: stop deploy prompting. Both default to prompting when unset, and
+# this file is Git-ignored once copied to .tensorstead/deploy.mk, so nothing below
+# ever reaches version control.
+#
+# The vault script reads the passphrase from the macOS Keychain rather than a
+# plaintext file -- the vault holds the estate's management and replication
+# tokens, so a readable copy on disk is a credential at rest guarded only by
+# file mode. Store it once with:
+#
+#   security add-generic-password -a "$USER" -s tensorstead-vault -w
+#
+# Leave TENSORSTEAD_BECOME_AUTH set to prompt unless the target hosts grant the
+# deploying user passwordless sudo. Emptying it means your SSH key alone is
+# root on those machines -- reasonable for a single-operator appliance, and
+# worth deciding rather than inheriting.
+#
+# export TENSORSTEAD_VAULT_AUTH  = --vault-password-file $(HOME)/.config/tensorstead/vault-pass.sh
+# export TENSORSTEAD_BECOME_AUTH =

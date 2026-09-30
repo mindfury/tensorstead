@@ -1,0 +1,25 @@
+# Managed by Tensorstead (ansible/roles/node_prepare). Edits are overwritten.
+#
+# Sets the fabric MTU as a **device** property, via systemd-udev, deliberately
+# outside /etc/netplan.
+#
+# NVIDIA Sync owns /etc/netplan and enforces that ownership: Cluster Assistant
+# scans the directory, renames competing files to `.sync-disabled-<timestamp>`,
+# and journals what it disabled in .nvidia-sync-disabled-manifest.json. An
+# earlier version of this role wrote an MTU-only netplan file believing that was
+# separation enough. It was not -- the file was disabled, the running MTU
+# survived only as residual state from the last `netplan apply`, and this role's
+# own assertion reported success for a setting that would vanish at reboot.
+#
+# Addressing is Sync's. The link's MTU is ours. Different subsystems, so neither
+# can disable the other.
+#
+# Matched on MAC rather than OriginalName: `.link` matching happens during udev
+# net_setup_link, and which name the device holds at that moment is exactly the
+# ambiguity this hardware already causes -- one physical port presents as two
+# Linux interfaces. A MAC is unambiguous.
+[Match]
+MACAddress={{ node_prepare_fabric_mac }}
+
+[Link]
+MTUBytes={{ node_prepare_fabric_mtu }}

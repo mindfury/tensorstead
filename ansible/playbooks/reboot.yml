@@ -1,0 +1,142 @@
+---
+# Reboot one Tensorstead node, and say what will come back before it goes down.
+#
+#   make reboot TENSORSTEAD_REBOOT_LIMIT=spark-beta.internal
+#
+# **This is the ordinary reboot, not the emergency one.** Ansible reboots over
+# SSH, so it can only reboot a node healthy enough not to need it. The failure
+# that makes an operator want to force a reboot on this estate is the opposite
+# case: a recorded NVIDIA driver deadlock left the node
+# pingable with a usable text console while `sshd`, Docker, the coordinator and
+# every GPU-touching path stopped answering. Nothing here reaches that node. The
+# recovery for it is the physical power button, and this session's own history
+# has a second instance -- a hand-run build with BUILD_JOBS=16 starved `sshd`
+# and the node was power-cycled by hand.
+#
+# So: use this for kernel updates, a clean restart, clearing a state you can
+# still log in to inspect. For a wedged node, walk over to it.
+#
+# **One host at a time, by default.** The estate's deployments span both Sparks
+# as a TP=2 group, so rebooting both in one command is not a rolling restart --
+# it is an outage with extra steps. Naming a limit is required; `-e
+# tensorstead_reboot_all=true` is the deliberate override for the case where you
+# really do mean the whole estate.
+#
+# **Know what comes back.** The pre-flight below reports each node's
+# boot-restoration setting and any enabled deployment units, because the
+# defining feature was not the deadlock -- it was that boot restoration brought
+# the same deployment back on every reboot, so each recovery attempt re-entered
+# the same state, and the node was ultimately reimaged. A reboot is only an
+# escape hatch if you know what is waiting on the other side of it.
+
+- name: Reboot a Tensorstead node
+  hosts: tensorstead_coordinators:tensorstead_agents
+  become: true
+  gather_facts: true
+  vars:
+    tensorstead_reboot_all: false
+    # How long to wait for the node to answer again. Generous: a Spark that has
+    # to re-initialise its accelerator takes considerably longer than a laptop,
+    # and a bound that expires early reports a failed reboot for a node that is
+    # merely still booting -- which is the kind of false alarm that sends
+    # someone to the machine room for nothing.
+    tensorstead_reboot_timeout: 900
+  tasks:
+    - name: Refuse an unlimited reboot
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts | length) == 1 or (tensorstead_reboot_all | bool)
+        fail_msg: >-
+          This would reboot {{ ansible_play_hosts | length }} hosts at once
+          ({{ ansible_play_hosts | join(', ') }}). Deployments here span both
+          Sparks as one group, so that is an outage rather than a rolling
+          restart. Name one host with TENSORSTEAD_REBOOT_LIMIT=<host>, or pass
+          -e tensorstead_reboot_all=true if you mean it.
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    # ---------------------------------------------------------- what comes back
+    - name: Read this node's boot-restoration setting
+      ansible.builtin.slurp:
+        src: /etc/tensorstead/agent.env
+      register: tensorstead_agent_env
+      failed_when: false
+
+    # Parsed line-wise rather than by splitting on the key. The first attempt
+    # split the decoded file on a '\n' written inside a YAML folded scalar,
+    # where it is a literal backslash-n and not a newline -- so the "value" was
+    # the whole remainder of the file, comments included, printed to the
+    # operator as if it were a setting. Caught by running it.
+    - name: Read the boot-restoration setting out of the agent environment
+      ansible.builtin.set_fact:
+        tensorstead_boot_restoration: >-
+          {{ (tensorstead_agent_env.content | b64decode).splitlines()
+             | select('match', 'TENSORSTEAD_ALLOW_BOOT_RESTORATION=')
+             | map('regex_replace', '^TENSORSTEAD_ALLOW_BOOT_RESTORATION=', '')
+             | list | first
+             | default('unknown (not set in /etc/tensorstead/agent.env)', true) }}
+      when: tensorstead_agent_env.content is defined
+
+    - name: Report whether this node may restore deployments on boot
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} boot restoration:
+          {{ tensorstead_boot_restoration
+             | default('unknown (no readable /etc/tensorstead/agent.env)', true) }}
+
+    # Read through service facts rather than shelling out to `systemctl
+    # list-unit-files`: the facts already carry each unit's enablement, and a
+    # module beats parsing CLI output for the same reason this product does not
+    # parse `docker` output where an API exists.
+    - name: Gather service facts before rebooting
+      ansible.builtin.service_facts:
+
+    # Matched by *excluding* the control-plane units rather than by guessing a
+    # deployment prefix. The first version looked for `tensorstead-deployment-*`,
+    # which matches nothing: the agent names a unit `tensorstead-<container>` and
+    # names the container `tensorstead-<deployment-id>`, so the real unit is
+    # `tensorstead-tensorstead-<ULID>.service`. That version would have reported
+    # "nothing restores on boot" however many deployments were enabled -- a
+    # false reassurance in the one check this playbook exists to provide, and
+    # it read as correct because on this estate the answer happened to be
+    # nothing anyway. Found by listing the units on a node instead of trusting
+    # the pattern.
+    - name: Select deployment units enabled to start at boot
+      ansible.builtin.set_fact:
+        tensorstead_boot_units: >-
+          {{ ansible_facts.services
+             | dict2items
+             | selectattr('key', 'match', 'tensorstead-.*')
+             | rejectattr('key', 'in', ['tensorstead-coordinator.service',
+                                        'tensorstead-mcp.service',
+                                        'tensorstead-agent.service'])
+             | selectattr('value.status', 'defined')
+             | selectattr('value.status', 'equalto', 'enabled')
+             | map(attribute='key') | list }}
+
+    - name: Report what will start on its own after the reboot
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} will restore on boot:
+          {{ tensorstead_boot_units if tensorstead_boot_units else 'nothing' }}
+
+    # --------------------------------------------------------------- the reboot
+    - name: Reboot and wait for the node to answer again
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ tensorstead_reboot_timeout | int }}"
+        msg: Rebooting for Tensorstead maintenance
+
+    - name: Report the control-plane services after the reboot
+      ansible.builtin.service_facts:
+
+    - name: Name each Tensorstead unit's post-reboot state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ item }}:
+          {{ ansible_facts.services[item ~ '.service'].state | default('not installed') }}
+      loop:
+        - tensorstead-coordinator
+        - tensorstead-mcp
+        - tensorstead-agent
+      when: (item ~ '.service') in ansible_facts.services

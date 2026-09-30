@@ -1,0 +1,202 @@
+---
+- name: Check Tensorstead host prerequisites and local services
+  hosts: tensorstead_coordinators:tensorstead_agents
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Require Linux and systemd
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['system'] == 'Linux'
+          - ansible_facts['service_mgr'] == 'systemd'
+        fail_msg: Tensorstead readiness requires a Linux host managed by systemd.
+
+    - name: Check Python prerequisite
+      ansible.builtin.command:
+        cmd: "{{ tensorstead_python_executable }} --version"
+      changed_when: false
+
+    - name: Check Docker prerequisite
+      ansible.builtin.command:
+        cmd: docker info
+      changed_when: false
+
+    - name: Check NVIDIA Container Toolkit prerequisite
+      ansible.builtin.command:
+        cmd: nvidia-container-cli --version
+      changed_when: false
+
+    - name: Gather service states
+      ansible.builtin.service_facts:
+
+    # Readiness asks whether the service is *running now*, not whether it is
+    # arranged to start at boot. Those are different questions and this asserted
+    # both, so an estate that deliberately does not come up on boot -- this one,
+    # by operator decision -- failed readiness while being entirely healthy.
+    #
+    # The boot arrangement is reported below instead of asserted, because it is
+    # a policy choice (`tensorstead_services_enabled_at_boot`) rather than a
+    # health property, and a check that fails on a deliberate decision teaches
+    # operators to ignore it.
+    - name: Check coordinator systemd service
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['tensorstead-coordinator.service'].state == 'running'
+        fail_msg: >-
+          tensorstead-coordinator is not running. Start it with `make services-start`;
+          if it should also survive a reboot, `make services-boot-enable`.
+      when: inventory_hostname in groups['tensorstead_coordinators']
+
+    - name: Check MCP systemd service
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['tensorstead-mcp.service'].state == 'running'
+        fail_msg: >-
+          tensorstead-mcp is not running. Start it with `make services-start`;
+          if it should also survive a reboot, `make services-boot-enable`.
+      when: inventory_hostname in groups['tensorstead_coordinators']
+
+    - name: Check agent systemd service
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['tensorstead-agent.service'].state == 'running'
+        fail_msg: >-
+          tensorstead-agent is not running. Start it with `make services-start`;
+          if it should also survive a reboot, `make services-boot-enable`.
+
+    # Built as a list first, then looped, rather than looping all three names
+    # behind a `when`. The guard version kept reporting a coordinator on an
+    # agent-only node: systemd knows names it has no unit for, and the
+    # conditions did not filter it out however they were written. Selecting the
+    # units that genuinely carry a status is the same approach services.yml
+    # uses, and it demonstrably works -- which beat one more theory about Jinja.
+    - name: Select the Tensorstead units installed on this host
+      ansible.builtin.set_fact:
+        tensorstead_units_present: >-
+          {{ ['tensorstead-coordinator', 'tensorstead-mcp', 'tensorstead-agent']
+             | select('in', ansible_facts.services
+                             | dict2items
+                             | selectattr('value.status', 'defined')
+                             | rejectattr('value.status', 'equalto', 'not-found')
+                             | map(attribute='key')
+                             | map('regex_replace', '\.service$', '')
+                             | list)
+             | list }}
+
+    - name: Report the boot arrangement for each unit installed here
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ item }}:
+          starts at boot = {{ ansible_facts.services[item ~ '.service'].status }}
+      loop: "{{ tensorstead_units_present }}"
+      when: inventory_hostname in groups['tensorstead_agents']
+
+    # The bundle was installed on every agent and pointed at by nothing, so
+    # agent-to-agent image transfer fell back to the public trust store and
+    # could not verify a private managed CA -- while every other hop verified
+    # fine, which is what made it hard to see. Readiness
+    # checks the trust anchor is present *and* named in the agent's own
+    # environment: either one alone is what the estate already had.
+    - name: Check the managed CA bundle is installed for agent-to-agent TLS
+      ansible.builtin.stat:
+        path: "{{ tensorstead_agent_ca_bundle }}"
+      register: tensorstead_agent_ca_stat
+      when:
+        - tensorstead_managed_tls | bool
+        - inventory_hostname in groups['tensorstead_agents']
+
+    - name: Require the managed CA bundle to be readable
+      ansible.builtin.assert:
+        that:
+          - tensorstead_agent_ca_stat.stat.exists
+          - tensorstead_agent_ca_stat.stat.readable | default(false)
+        fail_msg: >-
+          {{ tensorstead_agent_ca_bundle }} is missing or unreadable. Agent-to-agent
+          image distribution verifies peer certificates against it, and without
+          it a multi-node image build fails with CERTIFICATE_VERIFY_FAILED while
+          coordinator calls keep working.
+      when:
+        - tensorstead_managed_tls | bool
+        - inventory_hostname in groups['tensorstead_agents']
+
+    - name: Require the agent environment to name the CA bundle
+      ansible.builtin.lineinfile:
+        path: /etc/tensorstead/agent.env
+        line: TENSORSTEAD_AGENT_CA_BUNDLE={{ tensorstead_agent_ca_bundle }}
+        state: present
+      check_mode: true
+      register: tensorstead_agent_ca_env
+      failed_when: tensorstead_agent_ca_env.changed
+      when:
+        - tensorstead_managed_tls | bool
+        - inventory_hostname in groups['tensorstead_agents']
+
+    - name: Check coordinator health endpoint
+      ansible.builtin.uri:
+        url: >-
+          {{ 'https://' + tensorstead_agent_tls_server_name
+             if tensorstead_managed_tls | bool else 'http://127.0.0.1' }}:{{
+             tensorstead_coordinator_port }}/health
+        method: GET
+        status_code: 200
+        validate_certs: "{{ tensorstead_managed_tls | bool }}"
+        ca_path: "{{ tensorstead_agent_ca_bundle if tensorstead_managed_tls | bool else omit }}"
+        return_content: false
+      when: inventory_hostname in groups['tensorstead_coordinators']
+
+    # A readiness check that only ever spoke plain HTTP to loopback would keep
+    # passing if TLS were misconfigured, so the exposure this closes is checked
+    # from the outside as well.
+    - name: Check the coordinator API is not reachable over plain HTTP
+      ansible.builtin.uri:
+        url: "http://{{ tensorstead_agent_tls_server_name }}:{{ tensorstead_coordinator_port }}/v1/nodes"
+        method: GET
+        status_code: -1
+        return_content: false
+      register: tensorstead_cleartext_probe
+      failed_when: tensorstead_cleartext_probe.status | default(-1) > 0
+      when:
+        - inventory_hostname in groups['tensorstead_coordinators']
+        - tensorstead_managed_tls | bool
+
+    - name: Check MCP endpoint rejects unauthenticated callers
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host | default(inventory_hostname) }}:{{ tensorstead_mcp_port | default(8090) }}{{ tensorstead_mcp_path | default('/mcp') }}"
+        method: GET
+        status_code: 401
+        validate_certs: true
+        ca_path: "{{ tensorstead_agent_ca_bundle }}"
+        return_content: false
+      when: inventory_hostname in groups['tensorstead_coordinators']
+
+    - name: Check agent information endpoint with configured CA
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host | default(inventory_hostname) }}:{{ tensorstead_agent_port }}/agent/v1/info"
+        method: GET
+        status_code: 200
+        validate_certs: true
+        ca_path: "{{ tensorstead_agent_ca_bundle }}"
+        return_content: false
+      when: inventory_hostname in groups['tensorstead_agents']
+
+- name: Check coordinator-to-agent reachability
+  hosts: tensorstead_coordinators
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Query every nominated agent with the coordinator trust bundle
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[item].ansible_host | default(item) }}:{{ tensorstead_agent_port }}/agent/v1/info"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ tensorstead_management_token }}"
+        status_code: 200
+        validate_certs: true
+        ca_path: "{{ tensorstead_agent_ca_bundle }}"
+        return_content: false
+      loop: "{{ groups['tensorstead_agents'] }}"
+      no_log: true
+
+    - name: Report coordinator-to-agent readiness
+      ansible.builtin.debug:
+        msg: "Coordinator can reach every nominated agent using configured TLS verification."

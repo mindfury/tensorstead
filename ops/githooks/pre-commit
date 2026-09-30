@@ -1,0 +1,46 @@
+#!/bin/sh
+# Reject a commit whose *staged* Python fails formatting or lint.
+#
+# This is the cheap half of the gate. It exists because of a specific, repeated
+# failure: `make lint` runs over the whole repository and is run by hand, so a
+# file that was never formatted rides along in a commit and breaks the gate for
+# whoever runs it next -- which is how `make check`, and through it
+# `make release-local` and a deploy, ended up red on `main`.
+#
+# Staged files only, and only Python. Checking the whole tree here would report
+# problems in files the commit does not touch, which on this repository is the
+# normal state: a session commits `src/` while ops artifacts and working notes
+# modified beside it. A gate that cries about unrelated files gets bypassed, and
+# a bypassed gate is not a gate.
+#
+# Known limit: a partially staged file is checked as it exists in the working
+# tree, not as it was staged. Catching that properly needs a stash dance in a
+# hook, which is a good way to lose work. The full tree is checked on push.
+#
+# Bypass: TENSORSTEAD_SKIP_HOOKS=1 git commit ...   (or --no-verify)
+
+[ -n "$TENSORSTEAD_SKIP_HOOKS" ] && exit 0
+
+# PYTHONPATH is cleared for the same reason the Makefile clears it: a host-level
+# tool here exports one, which would let host-level site-packages
+# shadow the uv-managed project venv. See the note at the top of the Makefile.
+export PYTHONPATH=
+
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+[ -z "$staged" ] && exit 0
+
+# shellcheck disable=SC2086 # deliberate word-splitting; paths here have no spaces
+if ! uv run ruff format --check -- $staged; then
+    echo
+    echo "pre-commit: staged Python is not formatted."
+    echo "  fix:  uv run ruff format $staged && git add $staged"
+    exit 1
+fi
+
+# shellcheck disable=SC2086
+if ! uv run ruff check -- $staged; then
+    echo
+    echo "pre-commit: staged Python fails lint."
+    echo "  fix:  uv run ruff check --fix $staged   (review the fixes; some are not safe)"
+    exit 1
+fi

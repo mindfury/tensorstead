@@ -1,0 +1,18 @@
+[Unit]
+Description=Tensorstead Streamable HTTP MCP server
+After=network-online.target tensorstead-coordinator.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ tensorstead_service_user }}
+Group={{ tensorstead_service_user }}
+EnvironmentFile={{ tensorstead_config_dir }}/mcp.env
+ExecStart={{ tensorstead_venv }}/bin/tensorstead-mcp
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

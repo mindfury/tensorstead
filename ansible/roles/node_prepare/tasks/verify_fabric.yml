@@ -1,0 +1,80 @@
+---
+# Does the fabric actually carry what we declared?
+#
+# The MTU assertion in main.yml proves the *interface* is at 9000. It proves
+# nothing about whether a 9000-byte frame survives the wire, and RoCE at a
+# mismatched or unsupported MTU fails by silently dropping -- the worst failure
+# shape there is, because everything looks configured and throughput quietly
+# is not what anyone thinks.
+#
+# So this asks the question that matters: send a don't-fragment packet of
+# exactly the declared size to every peer and require an answer.
+#
+# **Run from a separate play**, deliberately. Ansible converges hosts in
+# parallel, so within one play this node could reach the ping before a peer has
+# applied its own MTU -- and it would fail against a fabric that was about to be
+# fine. A play boundary is a real barrier: every host finishes the first play
+# before any host starts the second. That is the honest fix; retries here would
+# have been a guess dressed as patience.
+
+- name: Verify the fabric carries the declared MTU to each peer
+  ansible.builtin.command:
+    # -M do sets don't-fragment, so an oversized frame is refused rather than
+    # split and silently "working". -s is the ICMP payload: total on the wire is
+    # payload + 8 (ICMP) + 20 (IPv4), so the declared MTU minus 28 is the
+    # largest packet that should pass.
+    cmd: >-
+      ping -M do -s {{ (node_prepare_fabric_mtu | int) - 28 }} -c 3 -W 5
+      {{ hostvars[item].node_prepare_fabric_address.split('/')[0] }}
+  loop: "{{ ansible_play_hosts_all | difference([inventory_hostname]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when:
+    - node_prepare_manage_mtu | bool
+    - hostvars[item].node_prepare_fabric_address is defined
+  changed_when: false
+  failed_when: false
+  register: node_prepare_fabric_ping
+
+- name: Name the peers that were reached and those that were not
+  ansible.builtin.set_fact:
+    # Projected down to peer names before the assertion sees them. Looping the
+    # assert over the raw command results made it echo an entire ping result
+    # dict per peer -- a wall of JSON around a one-line verdict. That is not
+    # merely untidy: output nobody can read is output nobody reads, and skimming
+    # is how a real failure goes unnoticed in a run that is green everywhere
+    # else.
+    node_prepare_peers_ok: >-
+      {{ node_prepare_fabric_ping.results | default([])
+         | rejectattr('skipped', 'defined')
+         | selectattr('rc', 'equalto', 0)
+         | map(attribute='item') | list }}
+    node_prepare_peers_failed: >-
+      {{ node_prepare_fabric_ping.results | default([])
+         | rejectattr('skipped', 'defined')
+         | rejectattr('rc', 'equalto', 0)
+         | map(attribute='item') | list }}
+
+- name: Assert every peer answers at the declared MTU
+  ansible.builtin.assert:
+    that:
+      - node_prepare_peers_failed | length == 0
+    fail_msg: |-
+      {{ inventory_hostname }} cannot reach
+      {{ node_prepare_peers_failed | join(', ') }} with a
+      {{ node_prepare_fabric_mtu }}-byte frame. This node's interface is
+      configured for it, so the wire or the far end is not: a cable or
+      transceiver that will not carry jumbo frames, or a peer that has not
+      converged.
+
+      Worth failing over rather than warning about. RoCE at a mismatched MTU
+      drops silently, so a fabric in this state looks configured, reports
+      healthy, and quietly does not perform -- the failure mode this whole
+      project exists to make impossible.
+
+      To back out: set node_prepare_fabric_mtu: 1500 and re-run. The role
+      converges back down.
+    success_msg: >-
+      {{ node_prepare_peers_ok | join(', ') }} answered at MTU
+      {{ node_prepare_fabric_mtu }}.
+  when: node_prepare_peers_ok | length > 0 or node_prepare_peers_failed | length > 0

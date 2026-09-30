@@ -1,0 +1,119 @@
+---
+# Control the three Tensorstead systemd services without reinstalling anything.
+#
+#   make services-status     read-only: what is installed, enabled, running
+#   make services-start      ensure started and enabled at boot
+#   make services-restart    restart in place
+#   make services-stop       stop, leaving them enabled at boot
+#
+# `site.yml` already enables and starts these, so this playbook is not the only
+# way to start them -- but it is the only *cheap* one. `make deploy` copies a
+# wheel, reinstalls the venv, regenerates config and TLS, and refuses outright
+# when the artifact named by the release version is missing. None of that is
+# what you want when the machine came back from a reboot and you only need to
+# know whether the services came back with it.
+#
+# The three units are deliberately not a single target. A coordinator-only
+# service does not exist on an agent-only host, and its absence there is not a
+# failure -- the same rule `common`'s restart handler learned when the hosted
+# MCP service was missing from its loop and every release quietly left MCP
+# serving stale code.
+#
+# **This does not touch inference.** These are the control-plane services.
+# Deployments run as their own Docker containers under their own units, and
+# stopping the agent does not stop a model that is serving -- which is what
+# makes `services-restart` safe to run against a busy estate, and is the same
+# property that let build 125 deploy underneath a live TP=2 group.
+
+- name: Control the Tensorstead control-plane services
+  hosts: tensorstead_coordinators:tensorstead_agents
+  become: true
+  gather_facts: true
+  vars:
+    # Read-only unless the caller says otherwise, so a mistyped target reports
+    # rather than acts.
+    tensorstead_service_state: status
+    # Whether these come back after a reboot, as a **separate axis** from
+    # whether they are running now.
+    #
+    # Starting a service and arranging for it to start itself later are two
+    # different decisions, and the first draft here conflated them: `start` also
+    # enabled at boot, so an operator who wanted the services up right now got a
+    # standing arrangement they never asked for. On this estate that is exactly
+    # backwards -- the posture is that nothing comes up until a human says so.
+    tensorstead_service_boot: unchanged
+  tasks:
+    - name: Require a known action
+      ansible.builtin.assert:
+        that:
+          - tensorstead_service_state in ['status', 'started', 'restarted', 'stopped']
+          - tensorstead_service_boot in ['unchanged', 'enabled', 'disabled']
+        fail_msg: >-
+          tensorstead_service_state must be one of status, started, restarted,
+          stopped (got {{ tensorstead_service_state }}); tensorstead_service_boot must
+          be one of unchanged, enabled, disabled (got {{ tensorstead_service_boot }}).
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Select the Tensorstead units this host actually has
+      ansible.builtin.set_fact:
+        tensorstead_units_present: >-
+          {{ ['tensorstead-coordinator', 'tensorstead-mcp', 'tensorstead-agent']
+             | select('in', ansible_facts.services | map('regex_replace', '\.service$', '') | list)
+             | list }}
+
+    - name: Report what is installed here
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ tensorstead_units_present | join(', ') if tensorstead_units_present else 'no Tensorstead units installed' }}
+
+    # Two tasks rather than one, because they answer different questions and an
+    # operator may want either without the other: start now without arranging a
+    # boot start, or change the boot arrangement without restarting anything
+    # that is currently serving.
+    - name: Apply the requested run state
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: "{{ tensorstead_service_state }}"
+        daemon_reload: true
+      loop: "{{ tensorstead_units_present }}"
+      when: tensorstead_service_state != 'status'
+
+    - name: Apply the requested boot arrangement
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: "{{ tensorstead_service_boot == 'enabled' }}"
+      loop: "{{ tensorstead_units_present }}"
+      when: tensorstead_service_boot != 'unchanged'
+
+    - name: Re-read service state after acting
+      ansible.builtin.service_facts:
+      when: tensorstead_service_state != 'status' or tensorstead_service_boot != 'unchanged'
+
+    - name: Report each unit
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ item }}:
+          state={{ ansible_facts.services[item ~ '.service'].state | default('unknown') }}
+          enabled={{ ansible_facts.services[item ~ '.service'].status | default('unknown') }}
+      loop: "{{ tensorstead_units_present }}"
+
+    # Reported rather than asserted. A unit that failed to come up is a fact an
+    # operator needs on screen, and failing the play here would stop the *other*
+    # hosts from reporting theirs -- which is the half of the picture that says
+    # whether the problem is one node or the estate.
+    - name: Name any unit that is not running after a start
+      ansible.builtin.debug:
+        msg: >-
+          NOT RUNNING after {{ tensorstead_service_state }}:
+          {{ inventory_hostname }} {{ item }} --
+          check `journalctl -u {{ item }} -n 50 --no-pager` on that host
+      loop: "{{ tensorstead_units_present }}"
+      when:
+        - tensorstead_service_state in ['started', 'restarted']
+        - ansible_facts.services[item ~ '.service'].state | default('unknown') != 'running'

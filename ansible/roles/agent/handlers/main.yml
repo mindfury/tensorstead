@@ -1,0 +1,6 @@
+---
+- name: Restart tensorstead agent
+  ansible.builtin.systemd_service:
+    name: tensorstead-agent
+    state: restarted
+    daemon_reload: true

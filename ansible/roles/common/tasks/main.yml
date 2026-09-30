@@ -1,0 +1,57 @@
+---
+- name: Validate Tensorstead deployment inputs
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] == 'Linux'
+      - ansible_facts['service_mgr'] == 'systemd'
+      - tensorstead_package_artifact is defined
+      - tensorstead_service_user is defined
+      - tensorstead_management_token is defined
+      - tensorstead_management_token | length > 0
+      - tensorstead_replication_token is defined
+      - tensorstead_replication_token | length > 0
+      - tensorstead_management_token != tensorstead_replication_token
+    fail_msg: >-
+      Tensorstead requires Linux/systemd, a wheel artifact, and distinct protected
+      management and replication token variables before services can start.
+  no_log: true
+
+- name: Verify package artifact exists on the controller
+  ansible.builtin.stat:
+    path: "{{ tensorstead_package_artifact }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: common_package_artifact_stat
+
+- name: Require a controller-local package artifact
+  ansible.builtin.assert:
+    that: common_package_artifact_stat.stat.exists
+    fail_msg: tensorstead_package_artifact must point to a wheel built on the Ansible controller.
+  run_once: true
+
+- name: Check Docker container runtime prerequisite
+  ansible.builtin.command:
+    cmd: docker info
+  changed_when: false
+  register: common_docker_info
+  failed_when: false
+
+- name: Check NVIDIA container prerequisite
+  ansible.builtin.command:
+    cmd: nvidia-container-cli --version
+  changed_when: false
+  register: common_nvidia_container_cli
+  failed_when: false
+
+- name: Require container prerequisites
+  ansible.builtin.assert:
+    that:
+      - common_docker_info.rc == 0
+      - common_nvidia_container_cli.rc == 0
+    fail_msg: >-
+      Docker and NVIDIA Container Toolkit must be installed and usable before
+      Tensorstead is configured; this playbook does not install either prerequisite.
+
+- name: Install the shared Tensorstead base
+  ansible.builtin.import_tasks: install.yml

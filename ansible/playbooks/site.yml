@@ -1,0 +1,225 @@
+---
+- name: Validate Tensorstead inventory topology
+  hosts: localhost
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Require exactly one coordinator host and at least one agent host
+      ansible.builtin.assert:
+        that:
+          - groups['tensorstead_coordinators'] | default([]) | length == 1
+          - groups['tensorstead_agents'] | default([]) | length >= 1
+        fail_msg: >-
+          Inventory must define exactly one tensorstead_coordinators host and at
+          least one tensorstead_agents host. Groups may overlap for colocation.
+
+    - name: Choose the controller-local inference API key path
+      ansible.builtin.set_fact:
+        tensorstead_inference_api_key_path_resolved: >-
+          {{ tensorstead_inference_api_key_path | default(lookup('env', 'HOME') +
+          '/.local/share/tensorstead/inference-api-key', true) }}
+      no_log: true
+
+    - name: Create the local inference API key directory
+      ansible.builtin.file:
+        path: "{{ tensorstead_inference_api_key_path_resolved | dirname }}"
+        state: directory
+        mode: '0700'
+
+    - name: Generate the inference API key once
+      ansible.builtin.set_fact:
+        tensorstead_inference_api_key: >-
+          {{ lookup('ansible.builtin.password', tensorstead_inference_api_key_path_resolved +
+          ' length=48 chars=ascii_letters,digits') }}
+      no_log: true
+
+    - name: Protect the local inference API key
+      ansible.builtin.file:
+        path: "{{ tensorstead_inference_api_key_path_resolved }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Create the local managed-TLS directory
+      ansible.builtin.file:
+        path: "{{ tensorstead_managed_tls_controller_dir }}"
+        state: directory
+        mode: '0700'
+      when: tensorstead_managed_tls | bool
+
+    - name: Create the managed private CA configuration
+      ansible.builtin.copy:
+        dest: "{{ tensorstead_managed_tls_controller_dir }}/ca.cnf"
+        mode: '0600'
+        content: |
+          [req]
+          prompt = no
+          distinguished_name = dn
+          x509_extensions = v3_ca
+          [dn]
+          CN = Tensorstead managed private CA
+          [v3_ca]
+          basicConstraints = critical,CA:TRUE,pathlen:0
+          keyUsage = critical,keyCertSign,cRLSign
+          subjectKeyIdentifier = hash
+      when: tensorstead_managed_tls | bool
+
+    - name: Create the managed private CA once
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -new -nodes -newkey rsa:4096 -sha256 -days 3650
+          -keyout {{ tensorstead_managed_tls_controller_dir }}/ca.key
+          -out {{ tensorstead_managed_tls_controller_dir }}/ca.pem
+          -config {{ tensorstead_managed_tls_controller_dir }}/ca.cnf
+        creates: "{{ tensorstead_managed_tls_controller_dir }}/ca.pem"
+      when: tensorstead_managed_tls | bool
+      no_log: true
+
+- name: Install common Tensorstead service prerequisites
+  hosts: tensorstead_coordinators:tensorstead_agents
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+
+- name: Generate managed host keys and certificate requests
+  hosts: tensorstead_agents:tensorstead_coordinators
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check whether the managed agent key and request already exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ tensorstead_agent_tls_key }}"
+        - "{{ tensorstead_agent_tls_cert }}"
+      register: agent_tls_files
+      when: tensorstead_managed_tls | bool
+
+    - name: Refuse a partially managed TLS identity
+      ansible.builtin.assert:
+        that: agent_tls_files.results[0].stat.exists == agent_tls_files.results[1].stat.exists
+        fail_msg: >-
+          Managed TLS found only one of the agent key/certificate files. Remove
+          neither automatically; inspect and repair the identity deliberately.
+      when: tensorstead_managed_tls | bool
+
+    - name: Generate agent private key and certificate request
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -new -nodes -newkey rsa:3072
+          -keyout {{ tensorstead_agent_tls_key }}
+          -out {{ tensorstead_config_dir }}/agent.csr
+          -subj /CN={{ tensorstead_agent_tls_server_name }}
+          -addext subjectAltName=DNS:{{ tensorstead_agent_tls_server_name }}
+        creates: "{{ tensorstead_agent_tls_cert }}"
+      when: tensorstead_managed_tls | bool and not agent_tls_files.results[1].stat.exists
+      no_log: true
+
+    - name: Restrict the TLS private key to the Tensorstead service account
+      ansible.builtin.file:
+        path: "{{ tensorstead_agent_tls_key }}"
+        owner: root
+        group: "{{ tensorstead_service_user }}"
+        mode: '0640'
+      when: tensorstead_managed_tls | bool
+
+    - name: Read the public agent certificate request
+      ansible.builtin.slurp:
+        src: "{{ tensorstead_config_dir }}/agent.csr"
+      register: agent_tls_csr
+      when: tensorstead_managed_tls | bool and not agent_tls_files.results[1].stat.exists
+      no_log: true
+
+- name: Sign managed agent certificates on the controller
+  hosts: localhost
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Create the local certificate-request directory
+      ansible.builtin.file:
+        path: "{{ tensorstead_managed_tls_controller_dir }}/requests"
+        state: directory
+        mode: '0700'
+      when: tensorstead_managed_tls | bool
+
+    - name: Copy new public certificate requests to the controller
+      ansible.builtin.copy:
+        content: "{{ hostvars[item].agent_tls_csr.content | b64decode }}"
+        dest: "{{ tensorstead_managed_tls_controller_dir }}/requests/{{ item }}.csr"
+        mode: '0600'
+      loop: "{{ groups['tensorstead_agents'] | union(groups['tensorstead_coordinators']) }}"
+      when: >-
+        tensorstead_managed_tls | bool and
+        hostvars[item].agent_tls_csr is defined and
+        not (hostvars[item].agent_tls_csr.skipped | default(false))
+
+    - name: Write certificate extensions for each new agent
+      ansible.builtin.copy:
+        dest: "{{ tensorstead_managed_tls_controller_dir }}/requests/{{ item }}.ext"
+        mode: '0600'
+        content: |
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=serverAuth
+          subjectAltName=DNS:{{ hostvars[item].tensorstead_agent_tls_server_name }}
+          subjectKeyIdentifier=hash
+          authorityKeyIdentifier=keyid,issuer
+      loop: "{{ groups['tensorstead_agents'] | union(groups['tensorstead_coordinators']) }}"
+      when: >-
+        tensorstead_managed_tls | bool and
+        hostvars[item].agent_tls_csr is defined and
+        not (hostvars[item].agent_tls_csr.skipped | default(false))
+
+    - name: Sign each new agent certificate
+      ansible.builtin.command:
+        cmd: >-
+          openssl x509 -req -sha256 -days 397
+          -in {{ tensorstead_managed_tls_controller_dir }}/requests/{{ item }}.csr
+          -CA {{ tensorstead_managed_tls_controller_dir }}/ca.pem
+          -CAkey {{ tensorstead_managed_tls_controller_dir }}/ca.key
+          -CAcreateserial
+          -out {{ tensorstead_managed_tls_controller_dir }}/requests/{{ item }}.crt
+          -extfile {{ tensorstead_managed_tls_controller_dir }}/requests/{{ item }}.ext
+      loop: "{{ groups['tensorstead_agents'] | union(groups['tensorstead_coordinators']) }}"
+      when: >-
+        tensorstead_managed_tls | bool and
+        hostvars[item].agent_tls_csr is defined and
+        not (hostvars[item].agent_tls_csr.skipped | default(false))
+      no_log: true
+
+- name: Install managed certificates and the public trust bundle
+  hosts: tensorstead_coordinators:tensorstead_agents
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Copy the signed certificate to each agent
+      ansible.builtin.copy:
+        content: >-
+          {{ lookup('ansible.builtin.file', tensorstead_managed_tls_controller_dir +
+          '/requests/' + inventory_hostname + '.crt') }}
+        dest: "{{ tensorstead_agent_tls_cert }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: tensorstead_managed_tls | bool
+
+    - name: Install the managed public CA bundle
+      ansible.builtin.copy:
+        src: "{{ tensorstead_managed_tls_controller_dir }}/ca.pem"
+        dest: "{{ tensorstead_agent_ca_bundle }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: tensorstead_managed_tls | bool
+
+- name: Install Tensorstead node agents
+  hosts: tensorstead_agents
+  become: true
+  roles:
+    - role: agent
+
+- name: Install Tensorstead coordinator
+  hosts: tensorstead_coordinators
+  become: true
+  roles:
+    - role: coordinator

@@ -1,0 +1,92 @@
+---
+# Node preparation defaults.
+#
+# Everything here is what a freshly reimaged DGX Spark needs before `site.yml`
+# installs Tensorstead. It exists because that list was being reassembled from
+# memory after every reimage, and the night we needed it most it was reassembled
+# wrong.
+#
+# Safe by default: nothing here weakens a machine unless an inventory asks it to.
+
+# The ConnectX-7 interface carrying node-to-node traffic. NVIDIA's own playbooks
+# use this name; `ibdev2netdev` confirms the port-to-interface mapping on a
+# given box, and a task below asserts rather than assumes it.
+node_prepare_fabric_interface: enp1s0f0np0
+
+# No default address, deliberately. Which node holds which address is a fact
+# about this estate, not something a role may invent -- and an address guessed
+# from inventory order would silently renumber the fabric the day someone sorts
+# the file. Declared per host; asserted below.
+# node_prepare_fabric_address: 10.100.184.1/24
+
+# The fabric MTU, declared and converged rather than reported.
+#
+# 9000 because this is a direct-attach 200Gb link between two nodes with no
+# switch in the path to disagree, and RoCE gains materially from jumbo frames.
+# NVIDIA Sync leaves it at 1500.
+#
+# Declared here rather than advised: the earlier version of this role read the
+# MTU and printed a suggestion, which is a description of a gap rather than a
+# closing of one. Ansible exists to state what the system should be and make it
+# so -- a value we are willing to recommend is a value we should converge to.
+#
+# Set to a falsey value to leave the MTU alone entirely.
+#
+# One caution worth knowing: RoCE needs both ends to agree, so a half-applied
+# change breaks the fabric. The play converges every node together and asserts
+# the result on each, which is why the assertion below is not optional.
+node_prepare_fabric_mtu: 9000
+
+# Boot to a text console. **The mitigation with the best evidence behind it**
+# for the driver deadlock that cost a node: every documented instance of that
+# bug involves a display server holding the other side of an nvidia-modeset
+# lock, and a headless inference appliance has no business running one.
+node_prepare_headless_boot: true
+
+# Show a GRUB menu for a few seconds on every boot. Cheap insurance -- the night
+# a node wedged there was no way into the bootloader at all.
+node_prepare_grub_menu: true
+node_prepare_grub_timeout: 5
+
+# Passwordless sudo for the deploying user. **Off by default**, because it makes
+# that user's SSH key root-equivalent on the machine, and a role in a shared
+# repository must not decide that for an operator. Turn it on in your settings
+# file if you want `make deploy` to stop prompting.
+node_prepare_passwordless_sudo: false
+
+# Public keys to install for the deploying user. Paths on the controller.
+node_prepare_authorized_keys: []
+
+# Report pending OS updates; never apply them. Deliberate: a kernel or driver
+# bump is the most plausible cause of the broken EFI boot entry found on one node,
+# and the deadlock lives in the 6.17 driver. Updates on these machines want a
+# human, a maintenance window, and a reachable GRUB menu.
+node_prepare_report_updates: true
+
+# Keep the journal across reboots. Ubuntu defaults to volatile storage, so when
+# spark-alpha deadlocked, the kernel's own account of it -- nvidia-modeset
+# blocked on an rw-semaphore held by vLLM -- existed only on the console and was
+# erased by the reboot needed to recover. `journalctl -b -1 -k` is the
+# difference between diagnosing that in five minutes and in four hours.
+node_prepare_journal_persistent: true
+
+# Stop *unattended* upgrades from taking the kernel or the NVIDIA driver.
+#
+# Deliberate updates stay available; this only closes the automatic path. The
+# deadlock that cost a node lives in 6.17.0-1029-nvidia, and an unattended
+# kernel bump is the most plausible explanation for the EFI boot entry found
+# broken on that machine. Neither should change while nobody is watching.
+#
+# Pattern-blacklisted rather than `apt-mark hold` on named packages: the exact
+# package names on DGX OS are something this role would be guessing at, and a hold list
+# that misses the real package is worse than none because it looks like cover.
+node_prepare_hold_kernel_and_driver: true
+node_prepare_unattended_blacklist:
+  - "linux-"
+  - "nvidia-"
+  - "libnvidia-"
+  - "cuda-"
+
+# The firmware boot-menu timeout this role considers usable. Reported rather
+# than enforced -- see the task for why.
+node_prepare_min_firmware_timeout: 3

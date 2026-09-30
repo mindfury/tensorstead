@@ -1,0 +1,17 @@
+-- A build spec may declare the produced image's own ENTRYPOINT.
+--
+-- Some runtimes must do work between the container starting and the server
+-- running -- the DSpark recipe installs an encoder that ships inside the
+-- *acquired model checkpoint* into vLLM, on every rank, at start. That work
+-- reads the mounted model directory, which does not exist at build time, so it
+-- cannot be a RUN step.
+--
+-- Recording the entrypoint keeps the mechanism declarative and
+-- provenance-tracked while its content stays pinned to whatever model revision
+-- was acquired. The alternative was a launch-time hook in the agent, which
+-- would make the management plane know why a particular model needs a
+-- particular file moved -- the image's business, not ours.
+--
+-- Empty JSON array means "the image's own", which is every spec written before
+-- this column existed.
+ALTER TABLE image_build_specs ADD COLUMN entrypoint TEXT NOT NULL DEFAULT '[]';

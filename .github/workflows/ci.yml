@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported and newest available.
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras --locked
+
+      # Lint, typecheck, every non-hardware test, and the coverage floor. The
+      # runner has a Docker daemon, so the Docker integration tests run here
+      # rather than skipping as they do on a laptop without one.
+      - name: make check
+        run: make check
+
+      # Syntax and lint only; contacts no host.
+      - name: make ansible-check
+        run: make ansible-check

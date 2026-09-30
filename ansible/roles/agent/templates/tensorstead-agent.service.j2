@@ -1,0 +1,19 @@
+[Unit]
+Description=Tensorstead node agent
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile={{ tensorstead_config_dir }}/agent.env
+ExecStart={{ tensorstead_venv }}/bin/uvicorn tensorstead.agent.app:build_agent_app_from_env --factory --host {{ tensorstead_agent_bind_host }} --port {{ tensorstead_agent_port }} --ssl-certfile {{ tensorstead_agent_tls_cert }} --ssl-keyfile {{ tensorstead_agent_tls_key }}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

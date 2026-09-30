@@ -1,0 +1,18 @@
+[Unit]
+Description=Tensorstead coordinator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ tensorstead_service_user }}
+Group={{ tensorstead_service_user }}
+EnvironmentFile={{ tensorstead_config_dir }}/coordinator.env
+ExecStart={{ tensorstead_venv }}/bin/stead coordinator serve --host {{ tensorstead_coordinator_bind_host }} --port {{ tensorstead_coordinator_port }} --store {{ tensorstead_coordinator_store }}{{ ' --tls-cert ' ~ tensorstead_agent_tls_cert ~ ' --tls-key ' ~ tensorstead_agent_tls_key if tensorstead_managed_tls | bool else '' }}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

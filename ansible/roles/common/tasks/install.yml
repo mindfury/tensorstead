@@ -1,0 +1,46 @@
+---
+- name: Gather service facts so the restart handler can skip absent units
+  ansible.builtin.service_facts:
+
+- name: Create the restricted Tensorstead service account
+  ansible.builtin.user:
+    name: "{{ tensorstead_service_user }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create common Tensorstead directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: '{{ tensorstead_root }}', owner: root, group: root, mode: '0755' }
+    - { path: '{{ tensorstead_config_dir }}', owner: root, group: root, mode: '0755' }
+    - { path: /var/lib/tensorstead, owner: root, group: root, mode: '0755' }
+
+- name: Copy the Tensorstead wheel to the host
+  ansible.builtin.copy:
+    src: "{{ tensorstead_package_artifact }}"
+    dest: "{{ tensorstead_root }}/{{ tensorstead_package_artifact | basename }}"
+    owner: root
+    group: root
+    mode: '0644'
+- name: Create the isolated Tensorstead virtual environment
+  ansible.builtin.command:
+    cmd: "{{ tensorstead_python_executable }} -m venv {{ tensorstead_venv }}"
+    creates: "{{ tensorstead_venv }}/bin/python"
+
+- name: Install Tensorstead coordinator, agent, CLI, and MCP extras
+  ansible.builtin.pip:
+    name: >-
+      tensorstead[coordinator,agent,cli,mcp] @ file://{{ tensorstead_root }}/{{
+      tensorstead_package_artifact | basename }}
+    executable: "{{ tensorstead_venv }}/bin/pip"
+    # Development wheels intentionally share the project version.  Reinstall
+    # the controller-built artifact so a new wheel is not mistaken for the
+    # previously-installed distribution merely because its version matches.
+    state: forcereinstall
+  notify: Restart Tensorstead services

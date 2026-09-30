@@ -1,0 +1,81 @@
+---
+- name: Create coordinator state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ tensorstead_service_user }}"
+    group: "{{ tensorstead_service_user }}"
+    mode: '0700'
+  loop:
+    - "{{ tensorstead_coordinator_store | dirname }}"
+    - "{{ tensorstead_coordinator_credentials_dir }}"
+
+- name: Configure coordinator environment
+  ansible.builtin.template:
+    src: coordinator.env.j2
+    dest: "{{ tensorstead_config_dir }}/coordinator.env"
+    owner: "{{ tensorstead_service_user }}"
+    group: "{{ tensorstead_service_user }}"
+    mode: '0600'
+  no_log: true
+  notify: Restart tensorstead coordinator
+
+- name: Install coordinator systemd unit
+  ansible.builtin.template:
+    src: tensorstead-coordinator.service.j2
+    dest: /etc/systemd/system/tensorstead-coordinator.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart tensorstead coordinator
+
+- name: Configure MCP environment
+  ansible.builtin.template:
+    src: mcp.env.j2
+    dest: "{{ tensorstead_config_dir }}/mcp.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  notify: Restart tensorstead MCP
+
+- name: Install MCP systemd unit
+  ansible.builtin.template:
+    src: tensorstead-mcp.service.j2
+    dest: /etc/systemd/system/tensorstead-mcp.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart tensorstead MCP
+
+# Whether the control plane comes back by itself after a reboot.
+#
+# Off by default, by operator decision. The wedge
+# there was *deployment* boot restoration, not this -- and the two are worth
+# keeping straight: the product does nothing when idle, so
+# a coordinator or agent that starts at boot cannot start a model on its
+# own. Disabling this prevents nothing the wedge describes.
+#
+# It is off anyway, and the reason is narrower than that: a control plane
+# that is not running cannot be *told* to start anything either -- not by a
+# stray automation, not by an operator agent acting on a stale plan. This
+# estate has had a watcher stop a healthy deployment five seconds after it
+# started. "Nothing comes up until a human says so" is a posture, and this
+# is the switch for it.
+#
+# Converges in both directions: set it true and a deploy re-enables. That
+# matters because the alternative -- a deploy that only ever enables -- is
+# how a disabled unit quietly comes back and the record stops matching.
+- name: Start MCP, and set whether it starts at boot
+  ansible.builtin.systemd_service:
+    name: tensorstead-mcp
+    enabled: "{{ tensorstead_services_enabled_at_boot | default(false) | bool }}"
+    state: started
+    daemon_reload: true
+
+- name: Start the coordinator, and set whether it starts at boot
+  ansible.builtin.systemd_service:
+    name: tensorstead-coordinator
+    enabled: "{{ tensorstead_services_enabled_at_boot | default(false) | bool }}"
+    state: started
+    daemon_reload: true

@@ -1,0 +1,13 @@
+---
+- name: Regenerate GRUB configuration
+  ansible.builtin.command:
+    cmd: update-grub
+  become: true
+  changed_when: true
+
+
+- name: Restart journald
+  ansible.builtin.systemd_service:
+    name: systemd-journald
+    state: restarted
+  become: true
