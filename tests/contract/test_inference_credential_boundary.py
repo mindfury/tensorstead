@@ -180,11 +180,16 @@ def test_the_credential_travels_per_request_and_is_never_stored_agent_side() -> 
 
 
 def test_the_node_provisioned_key_remains_a_fallback() -> None:
-    """Deployments predating product ownership must keep working."""
+    """Deployments predating product ownership must keep working.
+
+    The bound value and the node's key travel separately, because they are
+    not the same request: a bound key that cannot be enforced refuses the
+    start, while the node's key is only a default for runtimes that can use it.
+    """
     agent_route = (_SRC / "agent/routes/deployments.py").read_text(encoding="utf-8")
 
     assert "TENSORSTEAD_INFERENCE_API_KEY" in agent_route
-    assert "payload.inference_credential or os.environ.get(" in agent_route, (
+    assert 'node_default=os.environ.get("TENSORSTEAD_INFERENCE_API_KEY")' in agent_route, (
         "the supplied value must win, with the node's provisioning as fallback"
     )
 

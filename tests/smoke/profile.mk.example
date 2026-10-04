@@ -11,7 +11,9 @@ export TENSORSTEAD_SMOKE_MODEL = qwen36-27b
 export TENSORSTEAD_SMOKE_SOURCE_MODEL = nvidia/Qwen3.6-27B-NVFP4
 export TENSORSTEAD_SMOKE_EXPECTED_NODES = spark-alpha.internal,spark-beta.internal
 export TENSORSTEAD_SMOKE_INFERENCE_URL = http://spark-alpha.internal:8000
-export TENSORSTEAD_SMOKE_INFERENCE_API_KEY_FILE = ~/.local/share/tensorstead/inference-api-key
+# Optional. Set only when the deployment requires an inference key; the smoke
+# test then also checks that requests without it are refused.
+# export TENSORSTEAD_SMOKE_INFERENCE_API_KEY_FILE = ~/.local/share/tensorstead/inference-api-key
 export TENSORSTEAD_SMOKE_EXPECTED_REPLY = Tensorstead smoke test passed.
 
 # Hosted Streamable HTTP MCP endpoint and the managed private CA that signs it.

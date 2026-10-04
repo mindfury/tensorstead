@@ -16,6 +16,19 @@ is versioned separately (`stead status` reports both).
   Without one, the endpoint serves unauthenticated, and that includes TabbyAPI's
   admin endpoints. The suggested upstream image is x86_64 only.
 
+### Changed
+- **Inference keys are optional everywhere.** The Ansible install no longer
+  generates a node-wide inference API key unless
+  `tensorstead_inference_api_key_enabled: true` is set. Where a node does carry
+  one, it now applies only to runtimes that can enforce it (vLLM, llama.cpp).
+  SGLang and ExLlama deployments start unauthenticated instead of being refused.
+  A key bound to a specific deployment still refuses the start on a runtime that
+  cannot enforce it. **Upgrading:** an existing installation that relies on the
+  node key must set `tensorstead_inference_api_key_enabled: true` before
+  re-running `site.yml`. Otherwise the key is removed from the agents, and vLLM
+  and llama.cpp deployments serve unauthenticated after their next start. The
+  key file on the controller is kept and reused.
+
 ## [1.0.1] - 2026-09-30
 
 ### Fixed

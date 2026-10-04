@@ -13,18 +13,23 @@
           Inventory must define exactly one tensorstead_coordinators host and at
           least one tensorstead_agents host. Groups may overlap for colocation.
 
+    # Optional: a node-wide inference key is applied to deployments whose
+    # runtime can enforce one and skipped for runtimes that cannot. Per-
+    # deployment keys (`stead inferencekey`) need none of this.
     - name: Choose the controller-local inference API key path
       ansible.builtin.set_fact:
         tensorstead_inference_api_key_path_resolved: >-
           {{ tensorstead_inference_api_key_path | default(lookup('env', 'HOME') +
           '/.local/share/tensorstead/inference-api-key', true) }}
       no_log: true
+      when: tensorstead_inference_api_key_enabled | default(false) | bool
 
     - name: Create the local inference API key directory
       ansible.builtin.file:
         path: "{{ tensorstead_inference_api_key_path_resolved | dirname }}"
         state: directory
         mode: '0700'
+      when: tensorstead_inference_api_key_enabled | default(false) | bool
 
     - name: Generate the inference API key once
       ansible.builtin.set_fact:
@@ -32,12 +37,14 @@
           {{ lookup('ansible.builtin.password', tensorstead_inference_api_key_path_resolved +
           ' length=48 chars=ascii_letters,digits') }}
       no_log: true
+      when: tensorstead_inference_api_key_enabled | default(false) | bool
 
     - name: Protect the local inference API key
       ansible.builtin.file:
         path: "{{ tensorstead_inference_api_key_path_resolved }}"
         mode: '0600'
       no_log: true
+      when: tensorstead_inference_api_key_enabled | default(false) | bool
 
     - name: Create the local managed-TLS directory
       ansible.builtin.file:

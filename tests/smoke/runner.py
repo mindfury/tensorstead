@@ -47,7 +47,9 @@ class SmokeSettings:
     expected_source_model: str
     expected_nodes: tuple[str, ...]
     inference_url: str
-    inference_api_key_file: Path
+    # Optional: a deployment need not require a key. When one is named, the
+    # smoke test also proves the endpoint refuses requests without it.
+    inference_api_key_file: Path | None
     expected_reply: str
     mcp_url: str
     mcp_ca_file: Path
@@ -77,9 +79,11 @@ class SmokeSettings:
             ),
             expected_nodes=nodes,
             inference_url=required("TENSORSTEAD_SMOKE_INFERENCE_URL").rstrip("/"),
-            inference_api_key_file=Path(
-                required("TENSORSTEAD_SMOKE_INFERENCE_API_KEY_FILE")
-            ).expanduser(),
+            inference_api_key_file=(
+                Path(key_file).expanduser()
+                if (key_file := values.get("TENSORSTEAD_SMOKE_INFERENCE_API_KEY_FILE", "").strip())
+                else None
+            ),
             expected_reply=values.get(
                 "TENSORSTEAD_SMOKE_EXPECTED_REPLY", "Tensorstead smoke test passed."
             ),
@@ -96,7 +100,11 @@ def run(
 ) -> None:
     """Run API, MCP, and direct-inference checks without changing appliance state."""
     management_token = _read_secret(settings.management_token_file, "management token")
-    inference_key = _read_secret(settings.inference_api_key_file, "inference API key")
+    inference_key = (
+        _read_secret(settings.inference_api_key_file, "inference API key")
+        if settings.inference_api_key_file is not None
+        else None
+    )
     owns_client = client is None
     # An https coordinator presents the managed private CA's certificate, which
     # is in no public trust store, so the API client needs the same anchor the
@@ -345,7 +353,7 @@ def _expected_tool_names() -> list[str]:
     return [f"{operation.noun}_{operation.verb}" for operation in all_operations()]
 
 
-def _check_inference(inference_key: str, settings: SmokeSettings) -> None:
+def _check_inference(inference_key: str | None, settings: SmokeSettings) -> None:
     """Prove the runtime is ready, allowing bounded post-restart warm-up.
 
     A listening vLLM socket can briefly reset requests while it loads weights.
@@ -369,13 +377,14 @@ def _check_inference(inference_key: str, settings: SmokeSettings) -> None:
             time.sleep(2.0)
 
 
-def _check_inference_once(inference_key: str, settings: SmokeSettings) -> None:
+def _check_inference_once(inference_key: str | None, settings: SmokeSettings) -> None:
     with httpx.Client(base_url=settings.inference_url, timeout=60.0) as runtime:
-        unauthenticated = runtime.get("/v1/models")
-        if unauthenticated.status_code not in (401, 403):
-            raise SmokeCheckError("inference endpoint accepted a request without an API key")
-
-        headers = {"Authorization": f"Bearer {inference_key}"}
+        headers: dict[str, str] = {}
+        if inference_key is not None:
+            unauthenticated = runtime.get("/v1/models")
+            if unauthenticated.status_code not in (401, 403):
+                raise SmokeCheckError("inference endpoint accepted a request without an API key")
+            headers = {"Authorization": f"Bearer {inference_key}"}
         models = _get_json(runtime, "/v1/models", headers=headers)
         available = {
             str(model.get("id")) for model in models.get("data", []) if isinstance(model, dict)
