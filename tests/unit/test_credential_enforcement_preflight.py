@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
@@ -23,7 +24,7 @@ from tensorstead.agent.routes.deployments import _refuse_if_credential_cannot_be
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("adapter", [SGLangAdapter()])
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter()])
 def test_a_supplied_credential_the_runtime_cannot_enforce_refuses_the_start(
     adapter: object,
 ) -> None:
@@ -36,7 +37,7 @@ def test_a_supplied_credential_the_runtime_cannot_enforce_refuses_the_start(
     assert adapter.runtime_type in detail["message"]  # type: ignore[attr-defined,operator]
 
 
-@pytest.mark.parametrize("adapter", [SGLangAdapter(), LlamaCppAdapter()])
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), LlamaCppAdapter(), ExLlamaAdapter()])
 def test_no_credential_at_all_is_still_a_legitimate_deployment(adapter: object) -> None:
     """An operator who never asked for authentication must still be able to
     deploy SGLang/llama.cpp -- the guard fires only when a key was supplied

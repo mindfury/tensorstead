@@ -5,6 +5,17 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Added
+- **ExLlama runtime** (`exllama`, single-node) — serves EXL3-quantized and
+  unquantized models through TabbyAPI. EXL2 and GPTQ models are refused before
+  the container starts, since TabbyAPI no longer loads them. TabbyAPI can only
+  be given an API key through a file whose contents it logs on every start, so
+  binding an inference credential to an `exllama` deployment refuses the start.
+  Without one, the endpoint serves unauthenticated, and that includes TabbyAPI's
+  admin endpoints. The suggested upstream image is x86_64 only.
+
 ## [1.0.1] - 2026-09-30
 
 ### Fixed

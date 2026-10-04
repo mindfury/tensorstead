@@ -137,6 +137,7 @@ def _wire_services(
     store: str | Path | None = None,
 ) -> None:
     """Attach the services to ``app.state`` (injectable for tests)."""
+    from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
     from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
     from tensorstead.adapters.runtimes.sglang import SGLangAdapter
     from tensorstead.adapters.runtimes.vllm import VLLMAdapter
@@ -147,8 +148,8 @@ def _wire_services(
     from tensorstead.service.nodes import NodeService
     from tensorstead.service.operations import OperationService
 
-    # The shipped runtimes: vLLM and SGLang distribute, llama.cpp
-    # does not. Shipping the counter-example is what makes the refusal
+    # The shipped runtimes: vLLM and SGLang distribute, llama.cpp and
+    # ExLlama do not. Shipping the counter-example is what makes the refusal
     # real, and shipping a third adapter is what keeps the seam a seam rather
     # than two implementations of one shape.
     #
@@ -163,6 +164,7 @@ def _wire_services(
             "vllm": VLLMAdapter(),
             "llamacpp": LlamaCppAdapter(),
             "sglang": SGLangAdapter(),
+            "exllama": ExLlamaAdapter(),
         }
     )
     app.state.runtime_adapters = adapters
