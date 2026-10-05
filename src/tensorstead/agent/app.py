@@ -515,6 +515,7 @@ def build_agent_app(
     from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
     from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
     from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+    from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
     from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 
     app.state.runtime_adapters = {
@@ -522,6 +523,7 @@ def build_agent_app(
         "llamacpp": LlamaCppAdapter(),
         "sglang": SGLangAdapter(),
         "exllama": ExLlamaAdapter(),
+        "trtllm": TRTLLMAdapter(),
     }
 
     _mount_routes(app)

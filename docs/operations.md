@@ -201,10 +201,10 @@ so that is never a surprise.
 
 When you do use one, the product passes it to the runtime as environment
 (`VLLM_API_KEY` for vLLM, `LLAMA_API_KEY` for llama.cpp) so it never appears in
-the host-visible process command line, in an export, or in a log. SGLang and
-ExLlama have no mechanism this product can use safely, so binding a key to one
-of those deployments refuses the start rather than serving unauthenticated
-behind your back.
+the host-visible process command line, in an export, or in a log. SGLang,
+ExLlama and TensorRT-LLM have no mechanism this product can use safely, so
+binding a key to one of those deployments refuses the start rather than serving
+unauthenticated behind your back.
 
 A node may also carry a default key, if the installation enabled one
 (`tensorstead_inference_api_key_enabled`). It applies to any deployment with no

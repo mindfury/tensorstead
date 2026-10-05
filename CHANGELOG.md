@@ -15,15 +15,24 @@ is versioned separately (`stead status` reports both).
   binding an inference credential to an `exllama` deployment refuses the start.
   Without one, the endpoint serves unauthenticated, and that includes TabbyAPI's
   admin endpoints. The suggested upstream image is x86_64 only.
+- **TensorRT-LLM runtime** (`trtllm`, single-node) — serves Hugging Face
+  checkpoints with `trtllm-serve`. TensorRT-LLM's usage telemetry to NVIDIA is
+  off unless `telemetry: true` is set. `trtllm-serve` has no inference key, so
+  deployments serve unauthenticated, and `extra_args` options that would load
+  code or replace the recorded configuration are refused. Spanning nodes is not
+  supported, because TensorRT-LLM forms multi-node groups through MPI.
+- **Speech-to-text guide** (`docs/speech-to-text.md`) — a local transcription
+  endpoint served by the existing vLLM runtime (Whisper, Voxtral, Qwen3-ASR and
+  others), including building an image with vLLM's audio extra.
 
 ### Changed
 - **Inference keys are optional everywhere.** The Ansible install no longer
   generates a node-wide inference API key unless
   `tensorstead_inference_api_key_enabled: true` is set. Where a node does carry
   one, it now applies only to runtimes that can enforce it (vLLM, llama.cpp).
-  SGLang and ExLlama deployments start unauthenticated instead of being refused.
-  A key bound to a specific deployment still refuses the start on a runtime that
-  cannot enforce it. **Upgrading:** an existing installation that relies on the
+  SGLang, ExLlama and TensorRT-LLM deployments start unauthenticated instead of
+  being refused. A key bound to a specific deployment still refuses the start on
+  a runtime that cannot enforce it. **Upgrading:** an existing installation that relies on the
   node key must set `tensorstead_inference_api_key_enabled: true` before
   re-running `site.yml`. Otherwise the key is removed from the agents, and vLLM
   and llama.cpp deployments serve unauthenticated after their next start. The

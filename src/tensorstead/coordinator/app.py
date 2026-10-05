@@ -140,6 +140,7 @@ def _wire_services(
     from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
     from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
     from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+    from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
     from tensorstead.adapters.runtimes.vllm import VLLMAdapter
     from tensorstead.service.credentials import CredentialService
     from tensorstead.service.deployments import DeploymentService
@@ -148,8 +149,8 @@ def _wire_services(
     from tensorstead.service.nodes import NodeService
     from tensorstead.service.operations import OperationService
 
-    # The shipped runtimes: vLLM and SGLang distribute, llama.cpp and
-    # ExLlama do not. Shipping the counter-example is what makes the refusal
+    # The shipped runtimes: vLLM and SGLang distribute; llama.cpp, ExLlama
+    # and TensorRT-LLM do not. Shipping the counter-example is what makes the refusal
     # real, and shipping a third adapter is what keeps the seam a seam rather
     # than two implementations of one shape.
     #
@@ -165,6 +166,7 @@ def _wire_services(
             "llamacpp": LlamaCppAdapter(),
             "sglang": SGLangAdapter(),
             "exllama": ExLlamaAdapter(),
+            "trtllm": TRTLLMAdapter(),
         }
     )
     app.state.runtime_adapters = adapters

@@ -1061,8 +1061,9 @@ def _refuse_if_credential_cannot_be_enforced(
     """Resolve the runtime environment for an inference credential, or refuse.
 
     Authentication is optional. A runtime with a mechanism uses a key when one
-    is given; a runtime without one (SGLang, ExLlama) serves unauthenticated
-    and says so through ``endpoint_authenticated``. Two sources, two answers:
+    is given; a runtime without one (SGLang, ExLlama, TensorRT-LLM) serves
+    unauthenticated and says so through ``endpoint_authenticated``. Two
+    sources, two answers:
 
     - ``inference_api_key`` is a credential **bound to this deployment**. An
       operator asked for it by name, so a runtime that cannot enforce it

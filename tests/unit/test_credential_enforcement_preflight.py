@@ -18,13 +18,14 @@ from fastapi import HTTPException
 from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 from tensorstead.agent.routes.deployments import _refuse_if_credential_cannot_be_enforced
 
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter()])
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter(), TRTLLMAdapter()])
 def test_a_supplied_credential_the_runtime_cannot_enforce_refuses_the_start(
     adapter: object,
 ) -> None:
@@ -77,7 +78,7 @@ def test_llamacpp_now_passes_the_guard_it_used_to_fail() -> None:
     assert environment == {"LLAMA_API_KEY": "some-secret"}
 
 
-@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter()])
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter(), TRTLLMAdapter()])
 def test_a_node_default_key_never_stops_a_runtime_that_cannot_use_it(adapter: object) -> None:
     """A node-wide key is a default, not a requirement.
 
