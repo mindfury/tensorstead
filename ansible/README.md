@@ -47,10 +47,17 @@ Never paste a private key or either Tensorstead token into Git, chat, terminal h
 
 ## Inference API key
 
-Normal `site.yml` runs create one random inference API key on the Ansible
-controller at `~/.local/share/tensorstead/inference-api-key` (owner-only). Agent
-services use it to require a Bearer token for vLLM inference requests; it is
-not stored in the coordinator database or an exported deployment definition.
+Optional, and off by default. Without it, a deployment serves unauthenticated
+unless you bind a key to that deployment with `stead inferencekey` (see
+`docs/operations.md`).
+
+Set `tensorstead_inference_api_key_enabled: true` to give every agent a
+node-wide default key. `site.yml` then creates one random key on the Ansible
+controller at `~/.local/share/tensorstead/inference-api-key` (owner-only),
+reusing it on later runs. Agents apply it to deployments whose runtime can
+enforce a Bearer token (vLLM, llama.cpp); runtimes that cannot (SGLang, ExLlama,
+TensorRT-LLM) still start, unauthenticated. The key is not stored in the coordinator database
+or an exported deployment definition.
 
 Use the key from a local file rather than pasting it into a command:
 

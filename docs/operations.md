@@ -195,14 +195,22 @@ No command returns a secret value, because no such path exists.
 
 The credentials above are for *acquiring* a model from an upstream source. An
 inference credential is a different thing: the key a client must present to
-the runtime's own endpoint. The product owns it, passing it to the runtime as
-environment (`VLLM_API_KEY` for vLLM) so it never appears in the host-visible
-process command line, in an export, or in a log.
+the runtime's own endpoint. **It is optional.** Without one, a deployment serves
+unauthenticated, and `deployment show` reports `endpoint_authenticated: false`
+so that is never a surprise.
 
-A node is provisioned with a key on install. **An existing deployment keeps
-that node-provisioned key until you bind a credential to it.** This is the
-upgrade path: an estate moves from one key per node to per-deployment keys
-without a flag day, and nothing obliges you to use more than one.
+When you do use one, the product passes it to the runtime as environment
+(`VLLM_API_KEY` for vLLM, `LLAMA_API_KEY` for llama.cpp) so it never appears in
+the host-visible process command line, in an export, or in a log. SGLang,
+ExLlama and TensorRT-LLM have no mechanism this product can use safely, so
+binding a key to one of those deployments refuses the start rather than serving
+unauthenticated behind your back.
+
+A node may also carry a default key, if the installation enabled one
+(`tensorstead_inference_api_key_enabled`). It applies to any deployment with no
+binding of its own, **only where the runtime can enforce it**. A runtime that
+cannot simply starts unauthenticated, so a node-wide default never stops a
+runtime from running.
 
 ```bash
 stead inferencekey set prod-key --from-env VLLM_API_KEY   # or --from-file, or prompt

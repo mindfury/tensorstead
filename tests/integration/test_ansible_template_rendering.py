@@ -134,3 +134,17 @@ def test_rendered_env_files_have_one_assignment_per_line(env_file: str, managed_
         assert key.strip() and " " not in key.strip(), (
             f"{env_file}:{number} has a malformed variable name: {line!r}"
         )
+
+
+def test_the_agent_carries_a_node_inference_key_only_when_one_was_generated() -> None:
+    """The node-wide key is opt-in; without it the line must be absent, not empty.
+
+    An empty ``TENSORSTEAD_INFERENCE_API_KEY=`` would read as "no key" to the
+    agent today, but an absent line says so without depending on that.
+    """
+    agent_env = "ansible/roles/agent/templates/agent.env.j2"
+    with_key = _render(agent_env, tensorstead_managed_tls=False)
+    without_key = _render(agent_env, tensorstead_managed_tls=False, hostvars={"localhost": {}})
+
+    assert "TENSORSTEAD_INFERENCE_API_KEY=test-inference-key" in with_key.splitlines()
+    assert "TENSORSTEAD_INFERENCE_API_KEY" not in without_key

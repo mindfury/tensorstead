@@ -415,3 +415,56 @@ def test_create_classifies_a_refused_runtime_config_instead_of_500(
     # Pre-flight, so nothing was created.
     app = cast(FastAPI, client.app)
     assert "tensorstead-01J00000000000000000000009" not in app.state.container_engine.containers
+
+
+def test_a_node_key_does_not_stop_a_runtime_without_a_mechanism(
+    client: TestClient, model_path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The node's inference key is optional for runtimes that cannot use it.
+
+    SGLang declares no credential mechanism. With a node-wide key present this
+    start used to be refused, which made one installer-provisioned key a
+    requirement for every runtime on the node.
+    """
+    monkeypatch.setenv("TENSORSTEAD_INFERENCE_API_KEY", "inference-secret")
+    resp = client.post(
+        "/agent/v1/deployments",
+        json={
+            "deployment_id": "01J00000000000000000000002",
+            "revision": 1,
+            "runtime_type": "sglang",
+            "image_reference": "repo/sglang:tag",
+            "runtime_config": {},
+            "model_path": model_path,
+            "endpoint": "0.0.0.0:30000",
+        },
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 200, resp.text
+    app = cast(FastAPI, client.app)
+    container = app.state.container_engine.containers["tensorstead-01J00000000000000000000002"]
+    assert "inference-secret" not in (container.environment or {}).values()
+
+
+def test_a_bound_key_still_refuses_a_runtime_without_a_mechanism(
+    client: TestClient, model_path: str
+) -> None:
+    """A key bound to the deployment is an explicit request, so it is not skipped."""
+    resp = client.post(
+        "/agent/v1/deployments",
+        json={
+            "deployment_id": "01J00000000000000000000003",
+            "revision": 1,
+            "runtime_type": "sglang",
+            "image_reference": "repo/sglang:tag",
+            "runtime_config": {},
+            "model_path": model_path,
+            "endpoint": "0.0.0.0:30000",
+            "inference_credential": "bound-secret",
+        },
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "credential_not_enforceable"

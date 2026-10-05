@@ -18,9 +18,13 @@ tensorstead_agent_port: 8443
 tensorstead_agent_model_store: /var/lib/tensorstead/models
 tensorstead_agent_image_store: /var/lib/tensorstead/images
 tensorstead_agent_state_dir: /var/lib/tensorstead/state
-# A random inference API key is generated here on the controller during the
-# first normal site.yml run. It is not an Ansible Vault value and is never
-# committed to the repository.
+# Optional node-wide inference API key. Off by default: deployments serve
+# unauthenticated unless you bind a per-deployment key (`stead inferencekey`).
+# When true, a random key is generated here on the controller on the first run
+# (reused afterwards) and applied to deployments whose runtime can enforce it;
+# runtimes that cannot are left unauthenticated rather than refused. It is not
+# an Ansible Vault value and is never committed to the repository.
+tensorstead_inference_api_key_enabled: false
 tensorstead_inference_api_key_path: "{{ lookup('env', 'HOME') }}/.local/share/tensorstead/inference-api-key"
 # Normal mode: Ansible creates private TLS trust automatically. The controller
 # keeps its private CA key outside this repository; agent private keys stay on

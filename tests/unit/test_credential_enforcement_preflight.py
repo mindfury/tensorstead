@@ -15,15 +15,17 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 from tensorstead.agent.routes.deployments import _refuse_if_credential_cannot_be_enforced
 
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("adapter", [SGLangAdapter()])
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter(), TRTLLMAdapter()])
 def test_a_supplied_credential_the_runtime_cannot_enforce_refuses_the_start(
     adapter: object,
 ) -> None:
@@ -36,7 +38,7 @@ def test_a_supplied_credential_the_runtime_cannot_enforce_refuses_the_start(
     assert adapter.runtime_type in detail["message"]  # type: ignore[attr-defined,operator]
 
 
-@pytest.mark.parametrize("adapter", [SGLangAdapter(), LlamaCppAdapter()])
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), LlamaCppAdapter(), ExLlamaAdapter()])
 def test_no_credential_at_all_is_still_a_legitimate_deployment(adapter: object) -> None:
     """An operator who never asked for authentication must still be able to
     deploy SGLang/llama.cpp -- the guard fires only when a key was supplied
@@ -74,3 +76,36 @@ def test_llamacpp_now_passes_the_guard_it_used_to_fail() -> None:
     environment = _refuse_if_credential_cannot_be_enforced(LlamaCppAdapter(), "some-secret")
 
     assert environment == {"LLAMA_API_KEY": "some-secret"}
+
+
+@pytest.mark.parametrize("adapter", [SGLangAdapter(), ExLlamaAdapter(), TRTLLMAdapter()])
+def test_a_node_default_key_never_stops_a_runtime_that_cannot_use_it(adapter: object) -> None:
+    """A node-wide key is a default, not a requirement.
+
+    It used to be treated like a binding, so one key provisioned on every node
+    by the installer made every runtime without a mechanism unstartable.
+    """
+    assert _refuse_if_credential_cannot_be_enforced(adapter, None, node_default="node-key") is None
+
+
+def test_a_node_default_key_still_applies_where_the_runtime_can_enforce_it() -> None:
+    environment = _refuse_if_credential_cannot_be_enforced(
+        VLLMAdapter(), None, node_default="node-key"
+    )
+    assert environment == VLLMAdapter().inference_credential_env("node-key")
+
+
+def test_a_bound_key_wins_over_the_node_default() -> None:
+    environment = _refuse_if_credential_cannot_be_enforced(
+        LlamaCppAdapter(), "bound-key", node_default="node-key"
+    )
+    assert environment == {"LLAMA_API_KEY": "bound-key"}
+
+
+def test_a_bound_key_is_still_refused_where_it_cannot_be_enforced() -> None:
+    """The operator asked for this deployment to be keyed; that is not optional."""
+    with pytest.raises(HTTPException) as caught:
+        _refuse_if_credential_cannot_be_enforced(
+            SGLangAdapter(), "bound-key", node_default="node-key"
+        )
+    assert caught.value.detail["code"] == "credential_not_enforceable"  # type: ignore[index]

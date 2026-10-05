@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import ssl
 from collections.abc import Callable
@@ -123,6 +124,43 @@ def test_smoke_requires_an_inference_api_key(
 
     with pytest.raises(SmokeCheckError, match="without an API key"):
         run(_settings(tmp_path), client=api, check_mcp_transport=False)
+
+
+def test_smoke_runs_unauthenticated_when_no_key_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deployment need not require a key, so the smoke test must not either."""
+    api = httpx.Client(
+        base_url="http://coordinator.test", transport=httpx.MockTransport(_api_response)
+    )
+
+    def unauthenticated_runtime(request: httpx.Request) -> httpx.Response:
+        assert "authorization" not in request.headers
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "qwen36-27b"}]})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "Tensorstead smoke test passed."}}]},
+        )
+
+    inference = httpx.Client(
+        base_url="http://runtime.test", transport=httpx.MockTransport(unauthenticated_runtime)
+    )
+    monkeypatch.setattr("tests.smoke.runner.httpx.Client", lambda **_kwargs: inference)
+    settings = dataclasses.replace(_settings(tmp_path), inference_api_key_file=None)
+
+    run(settings, client=api, check_mcp_transport=False)
+
+
+def test_the_inference_key_file_setting_is_optional() -> None:
+    environ = {
+        "TENSORSTEAD_SMOKE_API": "http://coordinator.test",
+        "TENSORSTEAD_SMOKE_MGMT_TOKEN_FILE": "/tmp/token",
+        "TENSORSTEAD_SMOKE_INFERENCE_URL": "http://runtime.test",
+        "TENSORSTEAD_SMOKE_MCP_URL": "https://coordinator.test:8090/mcp",
+        "TENSORSTEAD_SMOKE_MCP_CA_FILE": "/tmp/ca.pem",
+    }
+    assert SmokeSettings.from_environment(environ).inference_api_key_file is None
 
 
 def _hosted_mcp_clients(

@@ -22,8 +22,10 @@ from typing import Any
 
 import pytest
 
+from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 from tensorstead.agent.container_engine.docker_py import DockerEngine
 from tensorstead.ports.runtime_adapter import ContainerRequirements
@@ -47,7 +49,13 @@ def test_every_shipped_adapter_declares_a_port() -> None:
     requirements at all. If a shipped adapter ever relies on it, that adapter
     silently inherits vLLM's port — which is the defect this file is about.
     """
-    for adapter in (VLLMAdapter(), LlamaCppAdapter(), SGLangAdapter()):
+    for adapter in (
+        VLLMAdapter(),
+        LlamaCppAdapter(),
+        SGLangAdapter(),
+        ExLlamaAdapter(),
+        TRTLLMAdapter(),
+    ):
         declared = adapter.container_requirements({}).api_port
         assert declared, f"{type(adapter).__name__} declares no in-container API port"
 

@@ -512,14 +512,18 @@ def build_agent_app(
         )
 
     # Runtime adapters by type (no cross-runtime config union).
+    from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
     from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
     from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+    from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
     from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 
     app.state.runtime_adapters = {
         "vllm": VLLMAdapter(),
         "llamacpp": LlamaCppAdapter(),
         "sglang": SGLangAdapter(),
+        "exllama": ExLlamaAdapter(),
+        "trtllm": TRTLLMAdapter(),
     }
 
     _mount_routes(app)
