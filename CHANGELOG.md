@@ -35,6 +35,11 @@ is versioned separately (`stead status` reports both).
   upgraded in place from Project X, which keeps its old store. The agent now
   finds a model it holds under its own store when the recorded root differs;
   containment is unchanged.
+- **TensorRT-LLM deployments start.** The adapter replaced the release image's
+  entrypoint with a bare `trtllm-serve`, which skips the setup NVIDIA's
+  entrypoint performs; on release 1.2.1 `import tensorrt` then failed
+  (`libnvonnxparser.so.10`) and every deployment exited at startup. It now runs
+  `trtllm-serve` through `/opt/nvidia/nvidia_entrypoint.sh`.
 
 ### Changed
 - **Inference keys are optional everywhere.** The Ansible install no longer

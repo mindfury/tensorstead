@@ -37,7 +37,10 @@ def test_the_model_is_the_positional_argument_and_the_server_binds_everywhere() 
 
 
 def test_the_entrypoint_is_trtllm_serve() -> None:
-    assert TRTLLMAdapter().container_entrypoint({}) == ["trtllm-serve"]
+    assert TRTLLMAdapter().container_entrypoint({}) == [
+        "/opt/nvidia/nvidia_entrypoint.sh",
+        "trtllm-serve",
+    ]
 
 
 def test_telemetry_is_off_unless_asked_for() -> None:

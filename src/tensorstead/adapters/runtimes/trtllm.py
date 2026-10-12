@@ -196,12 +196,18 @@ class TRTLLMAdapter:
         self,
         config: dict[str, Any] | None = None,  # noqa: ARG002
     ) -> list[str] | None:
-        """``trtllm-serve``, stated rather than inherited from the image.
+        """``trtllm-serve``, run through the image's NVIDIA entrypoint wrapper.
 
         The release image is a general environment, not a server image, so its
-        own entrypoint does not start one.
+        own entrypoint does not start one -- but replacing that entrypoint with
+        a bare ``trtllm-serve`` skips the setup it performs. Found on a DGX Spark
+        with release 1.2.1: ``/usr/local/tensorrt/lib`` is on neither the
+        image's ``LD_LIBRARY_PATH`` nor its ld.so config, so ``import tensorrt``
+        failed (``libnvonnxparser.so.10``) and every deployment exited at
+        startup. ``nvidia_entrypoint.sh`` ends in ``exec "$@"``, so the server is
+        still the container's main process.
         """
-        return ["trtllm-serve"]
+        return ["/opt/nvidia/nvidia_entrypoint.sh", "trtllm-serve"]
 
     def inference_credential_env(self, secret: str) -> dict[str, Any]:  # noqa: ARG002
         """No mechanism: ``trtllm-serve`` has no inference API key.
