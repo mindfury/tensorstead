@@ -25,6 +25,17 @@ is versioned separately (`stead status` reports both).
   endpoint served by the existing vLLM runtime (Whisper, Voxtral, Qwen3-ASR and
   others), including building an image with vLLM's audio extra.
 
+### Fixed
+- **Models acquired on a node with a non-default model store now start.** The
+  coordinator records a model's path under `/var/lib/tensorstead/models`
+  regardless of the node's `TENSORSTEAD_MODEL_STORE_PATH`, and the agent
+  refused any path outside its own store, so on such a node every newly
+  acquired model downloaded correctly and then failed to start ("does not
+  resolve to a directory beneath the managed store"). This hit every install
+  upgraded in place from Project X, which keeps its old store. The agent now
+  finds a model it holds under its own store when the recorded root differs;
+  containment is unchanged.
+
 ### Changed
 - **Inference keys are optional everywhere.** The Ansible install no longer
   generates a node-wide inference API key unless

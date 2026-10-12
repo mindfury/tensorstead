@@ -20,7 +20,7 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -466,7 +466,7 @@ class ModelAcquisitionService:
         try:
             model_id = str(legacy_dir.relative_to(self._store_dir))
         except ValueError:
-            return recorded_path
+            return self._rebase_foreign_path(recorded_path)
         safe_dir = self._model_dir(model_id)
         if legacy_dir.exists() and not safe_dir.exists():
             safe_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -485,6 +485,29 @@ class ModelAcquisitionService:
                     )
                 )
         return str(safe_dir) if safe_dir.exists() else recorded_path
+
+    def _rebase_foreign_path(self, recorded_path: str) -> str:
+        """Map a path recorded under another store root onto this store.
+
+        The coordinator records ``<root>/<source>:<model>`` with a root of its
+        own choosing, which is not this agent's whenever the operator set
+        ``TENSORSTEAD_MODEL_STORE_PATH`` -- an install upgraded in place keeps
+        its old store, and every model acquired afterwards was recorded under
+        a root that does not exist here, so its start was refused.
+
+        The model id is recovered from the first component carrying the
+        source qualifier, and only a model this agent actually holds is
+        answered: the result is ``_model_dir`` of that id, inside the store by
+        construction, so containment is unchanged. Nothing outside the store is
+        renamed or moved, and anything unrecognised comes back as given, for
+        ``require_model_path`` to refuse exactly as before.
+        """
+        parts = PurePosixPath(recorded_path).parts
+        start = next((i for i, part in enumerate(parts) if ":" in part), None)
+        if start is None:
+            return recorded_path
+        safe_dir = self._model_dir("/".join(parts[start:]))
+        return str(safe_dir) if safe_dir.is_dir() else recorded_path
 
     def _model_dir(self, model_id: str) -> Path:
         """One Docker-safe directory name for a source-qualified model ID."""
