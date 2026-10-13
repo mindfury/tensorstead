@@ -102,7 +102,10 @@ def build_server(*, client: CoordinatorClient | None = None) -> Any:
             "never merged. 'unknown' and 'unreachable' are ordinary values, not "
             "errors — report them rather than retrying. Long-running tools "
             "return an operation_id; poll operation_get for the outcome. There "
-            "is no shell, exec, file, or SSH tool, by design."
+            "is no shell, exec, file, or SSH tool, by design. Before changing "
+            "which model a deployment serves, read runbook_get('model-swap'): a "
+            "different model is a new deployment, and changing the model of a "
+            "running one is refused (model_change_refused)."
         ),
     )
     register_tools(server, client or CoordinatorClient())

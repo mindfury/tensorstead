@@ -7,6 +7,26 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **Model-swap guardrails.** Changing `model_id` on a running deployment is
+  refused (`model_change_refused`, 409): a different model is a new deployment.
+  On a stopped deployment it is still accepted, with a warning that the name,
+  endpoint and configs carry over. Starting or restarting a deployment whose
+  declared served model name another running deployment already serves is
+  refused (`served_name_conflict`, 409). A restart is checked before it stops
+  anything, and `modify` warns when a rename would collide. The served name is
+  read from `served_model_name` or from `extra_args`
+  (`served-model-name`, `alias`).
+- **Runbooks over MCP.** `runbook_list` and `runbook_get` serve procedures to
+  agents. The first is `model-swap` (also `docs/model-swap.md`), and the MCP
+  server's instructions point to it. `skills/tensorstead-model-swap/SKILL.md`
+  is the short form for agent hosts that load skills.
+
+### Fixed
+- **The release smoke test no longer counts `coordinator_version` as an
+  unexpected MCP tool.** Tools that are not catalogued operations are declared
+  in `NON_CATALOGUE_TOOLS`.
+
 ## [1.2.0] - 2026-10-12
 
 ### Added

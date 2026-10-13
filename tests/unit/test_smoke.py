@@ -236,9 +236,12 @@ def test_hosted_mcp_passes_when_tls_is_private_and_bad_credentials_are_refused(
 
 def test_hosted_mcp_tool_names_match_the_operation_catalogue() -> None:
     """The expected tool set is derived, never hand-maintained."""
+    from tensorstead.mcp.tools import NON_CATALOGUE_TOOLS
     from tensorstead.service.registry import operation_ids
 
-    assert _expected_tool_names() == [op.replace(".", "_") for op in operation_ids()]
+    assert _expected_tool_names() == [op.replace(".", "_") for op in operation_ids()] + sorted(
+        NON_CATALOGUE_TOOLS
+    )
 
 
 def test_missing_private_ca_bundle_is_reported_before_any_request(tmp_path: Path) -> None:

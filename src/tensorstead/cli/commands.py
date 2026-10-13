@@ -2186,7 +2186,13 @@ def _report_error(response: httpx.Response) -> None:
         raise typer.Exit(EXIT_UNREACHABLE)
     if code == "authorization_refused":
         raise typer.Exit(EXIT_AUTH_REFUSED)
-    if code in ("invalid_deployment", "runtime_not_distributed", "endpoint_conflict"):
+    if code in (
+        "invalid_deployment",
+        "runtime_not_distributed",
+        "endpoint_conflict",
+        "model_change_refused",
+        "served_name_conflict",
+    ):
         raise typer.Exit(EXIT_USAGE)
     raise typer.Exit(EXIT_FAILURE)
 

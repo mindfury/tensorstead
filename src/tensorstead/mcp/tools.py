@@ -39,6 +39,13 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from tensorstead.mcp.client import ApiResult, CoordinatorClient
+from tensorstead.runbooks import get_runbook, list_runbooks
+
+# MCP tools that are not catalogued management operations, so the surface
+# parity check (registry vs API/CLI/MCP) does not expect them and the smoke
+# test must not count them as extra: a version probe and the runbooks, which
+# are guidance for the agent rather than operations on the estate.
+NON_CATALOGUE_TOOLS = frozenset({"coordinator_version", "runbook_list", "runbook_get"})
 
 
 def register_tools(server: Any, client: CoordinatorClient) -> None:
@@ -71,6 +78,29 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         unauthenticated liveness check and deliberately does not disclose this.
         """
         return client.request("GET", "/v1/version")
+
+    @server.tool(name="runbook_list")
+    def runbook_list() -> ApiResult:
+        """Procedures to follow for multi-step changes, by name and summary.
+
+        Read the relevant runbook before a change it covers -- ``model-swap``
+        before changing which model any deployment serves.
+        """
+        return list_runbooks()
+
+    @server.tool(name="runbook_get")
+    def runbook_get(
+        name: Annotated[str, Field(description="Runbook name from runbook_list, e.g. model-swap.")],
+    ) -> ApiResult:
+        """The full text of one runbook (Markdown)."""
+        text = get_runbook(name)
+        if text is None:
+            return {
+                "code": "not_found",
+                "message": f"no runbook named {name!r}",
+                "detail": {"available": [r["name"] for r in list_runbooks()]},
+            }
+        return {"name": name, "text": text}
 
     @server.tool(name="node_list")
     def node_list() -> ApiResult:
@@ -616,6 +646,10 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
 
         Reports ``restart_required`` without acting on it: nothing is restarted
         as an implicit consequence of a modification.
+
+        Not for serving a different model: changing ``model_id`` on a running
+        deployment is refused (``model_change_refused``). A different model is a
+        new deployment -- follow runbook_get("model-swap").
 
         ``runtime_config`` merges by default so a one-key modify keeps its
         neighbours; set ``replace_config`` to replace the whole map.

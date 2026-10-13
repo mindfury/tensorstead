@@ -31,6 +31,7 @@ from typing import Any
 from tensorstead.domain.errors import (
     EndpointConflictError,
     InvalidDeploymentError,
+    ModelChangeRefusedError,
     NotFoundError,
     RuntimeNotDistributedError,
 )
@@ -40,6 +41,7 @@ from tensorstead.domain.models import (
     DeploymentRevision,
     canonical_file_selector,
 )
+from tensorstead.domain.served_name import declared_served_name
 from tensorstead.ports.repository import Repository
 from tensorstead.service.approvals import authorize_code_options
 from tensorstead.service.nodes import refuse_if_node_reserved
@@ -397,6 +399,46 @@ class DeploymentService:
                     detail={"conflicting_deployment": deployment.name, "endpoint": endpoint},
                 )
 
+    def _model_label(self, model_id: str | None) -> str:
+        """``source:model`` for messages, falling back to the bare id."""
+        model = self._repo.get_model(model_id) if model_id else None
+        if model is None:
+            return repr(model_id)
+        return f"{model.source_id}:{model.source_model_id}"
+
+    def _served_name_warnings(
+        self, deployment_id: str, runtime_config: dict[str, Any]
+    ) -> builtins.list[str]:
+        """Name another running deployment that serves under the same name.
+
+        Advisory at modify: a stopped definition harms no one. The start that
+        would make the collision real is refused instead (``lifecycle``).
+        """
+        name = declared_served_name(runtime_config)
+        if name is None:
+            return []
+        clashes = [
+            other.name
+            for other in self._repo.list_deployments()
+            if other.id != deployment_id
+            and other.desired_state == "running"
+            and declared_served_name(
+                getattr(
+                    self._repo.get_revision(other.id, other.current_revision),
+                    "runtime_config",
+                    None,
+                )
+            )
+            == name
+        ]
+        if not clashes:
+            return []
+        return [
+            f"served model name {name!r} is already served by running deployment(s) "
+            f"{', '.join(repr(c) for c in clashes)}; starting this one will be refused "
+            f"until the name differs or they stop"
+        ]
+
     # ------------------------------------------------------------------ read
     def list(self) -> list[Deployment]:
         return self._repo.list_deployments()
@@ -462,6 +504,37 @@ class DeploymentService:
         current = self._repo.get_revision(deployment.id, deployment.current_revision)
         if current is None:
             raise NotFoundError(f"deployment {deployment.name!r} has no current revision")
+
+        # A different model is a different deployment. Repointing one at another model
+        # keeps a name, endpoint, runtime config and host config chosen for the
+        # old model, and an agent that did exactly that to a running deployment,
+        # then restarted it, left it crashing on warmup with the previous
+        # model's host config. Refused while the deployment is meant to run;
+        # stopping it first is still possible, and is a deliberate act.
+        model_changes = model_id is not None and model_id != current.model_id
+        if model_changes and deployment.desired_state == "running":
+            raise ModelChangeRefusedError(
+                f"deployment {deployment.name!r} is running "
+                f"{self._model_label(current.model_id)}; changing it to "
+                f"{self._model_label(model_id)} on the same deployment is refused. Create a "
+                f"new deployment for the new model on a free endpoint, start it and confirm it "
+                f"serves, then stop this one (the model-swap runbook: MCP runbook_get "
+                f"'model-swap', or docs/model-swap.md)",
+                detail={
+                    "deployment": deployment.name,
+                    "current_model_id": current.model_id,
+                    "requested_model_id": model_id,
+                    "runbook": "model-swap",
+                },
+            )
+        swap_warnings: builtins.list[str] = []
+        if model_changes:
+            swap_warnings.append(
+                f"model changed on stopped deployment {deployment.name!r}: its name, "
+                f"endpoint, runtime config and host config were chosen for "
+                f"{self._model_label(current.model_id)} and carry over unchanged. Review them "
+                f"before starting, or create a new deployment instead (runbook 'model-swap')"
+            )
 
         # Apply the partial update over the current definition.
         new_nodes = (
@@ -603,6 +676,8 @@ class DeploymentService:
             # got MTP -- and a warning only ever shown at create would never be
             # seen by the person who needed it.
             "warnings": dropped
+            + swap_warnings
+            + self._served_name_warnings(deployment.id, dict(validated_config))
             + self.config_advisories(
                 current.runtime_type, validated_config, list(new_rev.participating_nodes)
             ),

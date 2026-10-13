@@ -45,8 +45,10 @@ from tensorstead.domain.errors import (
     AlreadyInStateError,
     NotFoundError,
     PartialFailureError,
+    ServedNameConflictError,
 )
 from tensorstead.domain.models import Deployment, ImageRecord, Node, ReplicaState
+from tensorstead.domain.served_name import declared_served_name
 from tensorstead.ports.node_client import AgentCallError
 from tensorstead.ports.repository import Repository
 from tensorstead.ports.runtime_adapter import NodePosition
@@ -131,6 +133,7 @@ class LifecycleService:
                 raise NotFoundError(
                     f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
                 )
+            self._refuse_served_name_conflict(deployment, revision.runtime_config)
 
             # Drive the agent on every participating node, collecting per-node
             # outcomes. Raises before the save below if any node
@@ -200,6 +203,11 @@ class LifecycleService:
         """
         with self._lock_for(deployment_id):
             deployment = self._get_deployment(deployment_id)
+            # Checked before the stop: a refused restart must leave a running
+            # deployment running, not stopped with nothing in its place.
+            revision = self._repo.get_revision(deployment.id, deployment.current_revision)
+            if revision is not None:
+                self._refuse_served_name_conflict(deployment, revision.runtime_config)
             # If running, stop first. If already stopped, just start.
             if deployment.desired_state == "running":
                 self._stop_on_nodes(deployment)
@@ -680,6 +688,38 @@ class LifecycleService:
                 f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
             )
         self._drive_nodes(revision, "stop", self._stop_on)
+
+    def _refuse_served_name_conflict(
+        self, deployment: Deployment, runtime_config: dict[str, Any] | None
+    ) -> None:
+        """Refuse a start that would put a second deployment under one model name.
+
+        Clients and gateways route by model name; two running deployments that
+        declare the same one make which of them answers an accident. Only a
+        *declared* name is compared: a runtime left to derive its name from the
+        model path cannot be predicted here, and guessing would refuse starts
+        that are fine.
+        """
+        name = declared_served_name(runtime_config)
+        if name is None:
+            return
+        for other in self._repo.list_deployments():
+            if other.id == deployment.id or other.desired_state != "running":
+                continue
+            other_revision = self._repo.get_revision(other.id, other.current_revision)
+            if other_revision is None:
+                continue
+            if declared_served_name(other_revision.runtime_config) == name:
+                raise ServedNameConflictError(
+                    f"served model name {name!r} is already served by running deployment "
+                    f"{other.name!r}; give {deployment.name!r} a different served name, or "
+                    f"stop {other.name!r} first (runbook 'model-swap')",
+                    detail={
+                        "served_model_name": name,
+                        "conflicting_deployment": other.name,
+                        "runbook": "model-swap",
+                    },
+                )
 
     def _get_deployment(self, deployment_id: str) -> Deployment:
         deployment = self._repo.get_deployment(deployment_id)
