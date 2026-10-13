@@ -226,7 +226,14 @@ def default_managed_paths() -> tuple[str, str]:
     Overridable so tests and non-standard installs point at the right
     locations without hard-coding them into the reading.
     """
-    models = os.environ.get("TENSORSTEAD_MODEL_STORE", "/var/lib/tensorstead/models")
+    # ``TENSORSTEAD_MODEL_STORE_PATH`` is what the install writes and what the
+    # agent stores models under; reading only the shorter name reported the
+    # default directory on every node with a configured store.
+    models = (
+        os.environ.get("TENSORSTEAD_MODEL_STORE_PATH")
+        or os.environ.get("TENSORSTEAD_MODEL_STORE")
+        or "/var/lib/tensorstead/models"
+    )
     images = os.environ.get("TENSORSTEAD_IMAGE_STORE", "/var/lib/docker")
     return models, images
 

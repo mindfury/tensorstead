@@ -21,7 +21,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -134,6 +134,24 @@ def _container_api_port(requirements: ContainerRequirements | None) -> int:
     if requirements is not None and requirements.api_port:
         return int(requirements.api_port)
     return _LEGACY_API_PORT
+
+
+def _model_mount_target(model_path: str, requirements: ContainerRequirements | None) -> str:
+    """Where the model is mounted inside the container: its host path by default.
+
+    An adapter may name another destination (``model_mount_target``); the
+    source is unchanged, so this decides only the name the runtime sees. It
+    must be an absolute path with no ``..``: the destination is still a path
+    inside a container this product builds, and a relative or climbing one
+    would make where the weights land a matter of Docker's interpretation.
+    """
+    target = requirements.model_mount_target if requirements is not None else None
+    if not target:
+        return model_path
+    path = PurePosixPath(target)
+    if not path.is_absolute() or ".." in path.parts or path == PurePosixPath("/"):
+        raise ValueError(f"model_mount_target {target!r} must be an absolute path below /")
+    return str(path)
 
 
 def _elide(text: str, limit: int) -> str:
@@ -978,7 +996,9 @@ class DockerEngine:
         create_args: dict[str, Any] = {
             "name": name,
             "command": command_args,
-            "volumes": {model_path: {"bind": model_path, "mode": "ro"}},
+            "volumes": {
+                model_path: {"bind": _model_mount_target(model_path, requirements), "mode": "ro"}
+            },
             # The declared endpoint selects only the *host-side* port Docker
             # publishes. Which port the runtime listens on inside the container
             # is the adapter's fact, and this line used to hold vLLM's 8000 for

@@ -29,7 +29,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from tensorstead.adapters.runtimes.extra_args import authorize_extra_arg, normalize_flag
 from tensorstead.ports.runtime_adapter import (
@@ -51,6 +51,12 @@ _UNSUPPORTED_QUANT_METHODS = frozenset({"exl2", "gptq"})
 
 # ``FP16``/``Q8``/``Q6``/``Q4``, or a ``k_bits,v_bits`` pair from 2 to 8 --
 # TabbyAPI's ``CACHE_TYPE``.
+# A served name becomes one directory name inside the container.
+_SERVED_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+# The parent the model is mounted under when a served name is set.
+_SERVED_MODEL_ROOT = "/models"
+
 _CACHE_MODE_RE = re.compile(r"^(FP16|Q8|Q6|Q4|[2-8]\s*,\s*[2-8])$")
 
 _FORBIDDEN_EXTRA_ARGS: dict[str, str] = {
@@ -94,6 +100,11 @@ class ExLlamaConfig(BaseModel):
     gpu_split: list[float] | None = Field(default=None, min_length=1)
     prompt_template: str | None = Field(default=None, min_length=1)
     vision: bool | None = None
+    # The name clients see in ``/v1/models`` and in responses. TabbyAPI has no
+    # such option -- it names a model after its directory -- so the adapter
+    # mounts the model at ``/models/<name>`` and serves it from there. Unset,
+    # the name is the store's directory token (``aHVnZ2luZ2ZhY2U6...``).
+    served_model_name: str | None = Field(default=None, min_length=1, max_length=128)
 
     # Flags this product does not model, forwarded verbatim.
     extra_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
@@ -115,6 +126,32 @@ class ExLlamaConfig(BaseModel):
                 f"model_subdir {value!r} must be a relative path inside the acquired model"
             )
         return value
+
+    @field_validator("served_model_name")
+    @classmethod
+    def _check_served_model_name(cls, value: str | None) -> str | None:
+        """One path component: it becomes a directory name inside the container."""
+        if value is not None and (not _SERVED_NAME_RE.fullmatch(value) or value in {".", ".."}):
+            raise ValueError(
+                f"served_model_name {value!r} must be letters, digits, '.', '_' or '-'"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _served_name_needs_the_whole_model(self) -> ExLlamaConfig:
+        """Refuse a name TabbyAPI would not report.
+
+        With ``model_subdir`` the served directory is a child of the mount, and
+        TabbyAPI would name the model after that child, not the name asked for.
+        """
+        if self.served_model_name is not None and self.model_subdir is not None:
+            raise ValueError(
+                "served_model_name cannot be combined with model_subdir: TabbyAPI "
+                "names a model after the directory it serves, which would be the "
+                "subdirectory. Acquire the quantization's own revision instead "
+                "(EXL3 repositories keep each one on its own branch)"
+            )
+        return self
 
     @field_validator("max_seq_len")
     @classmethod
@@ -366,10 +403,10 @@ class ExLlamaAdapter:
 
     def container_requirements(
         self,
-        config: dict[str, Any],  # noqa: ARG002
+        config: dict[str, Any],
         position: object | None = None,  # noqa: ARG002
     ) -> ContainerRequirements:
-        """TabbyAPI's port, plus the shared memory its own compose file asks for.
+        """TabbyAPI's port, the shared memory its compose file asks for, and the mount.
 
         TabbyAPI's ``docker-compose.yml`` sets ``shm_size: 8g`` and an unlimited
         ``memlock``, stating that ExLlamaV3 keeps tensor-parallel and CPU MoE
@@ -377,10 +414,12 @@ class ExLlamaAdapter:
         too small. Declared unconditionally because ``/dev/shm`` is a tmpfs
         whose size is an upper bound: memory is used only as it is written.
         """
+        served = ExLlamaConfig(**(config or {})).served_model_name
         return ContainerRequirements(
             api_port=_DEFAULT_API_PORT,
             shm_size=8 * 1024**3,
             ulimits={"memlock": (-1, -1)},
+            model_mount_target=f"{_SERVED_MODEL_ROOT}/{served}" if served else None,
         )
 
     def schema_probe(self) -> SchemaProbe | None:
@@ -417,7 +456,12 @@ class ExLlamaAdapter:
         _refuse_unsupported_quant(served)
         # TabbyAPI loads ``model_dir / model_name`` and takes no path to a model
         # directly, so the served directory is split back into the two.
-        args = ["--model-dir", str(served.parent), "--model-name", served.name]
+        if validated.served_model_name is not None:
+            # Mounted at /models/<name> by container_requirements; the host
+            # path above was still what the quantization check read.
+            args = ["--model-dir", _SERVED_MODEL_ROOT, "--model-name", validated.served_model_name]
+        else:
+            args = ["--model-dir", str(served.parent), "--model-name", served.name]
         # TabbyAPI binds 127.0.0.1 by default; the image's own CMD passes
         # 0.0.0.0, and this argv replaces that CMD. Without it the container
         # serves only its own loopback -- the llama.cpp failure again.
