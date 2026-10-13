@@ -269,3 +269,42 @@ def test_it_does_not_distribute_or_declare_a_memory_fraction() -> None:
     assert adapter.supports_distributed is False
     assert adapter.declared_memory_fraction({"gpu_split": [20]}) is None
     assert adapter.schema_probe() is None
+
+
+# --- served model name --------------------------------------------------------
+
+
+def test_a_served_name_is_what_tabbyapi_reports(tmp_path: Path) -> None:
+    """TabbyAPI names a model after its directory, so the name is a mount point."""
+    model = _model(tmp_path / "store" / "aHVnZ2luZ2ZhY2U6dHVyYm9kZXJw")
+    adapter = ExLlamaAdapter()
+    config = {"served_model_name": "qwen3-8b-exl3"}
+
+    args = adapter.build_launch_args(config, model_path=str(model))
+    requirements = adapter.container_requirements(config)
+
+    assert _flag(args, "--model-dir") == ["/models"]
+    assert _flag(args, "--model-name") == ["qwen3-8b-exl3"]
+    assert requirements.model_mount_target == "/models/qwen3-8b-exl3"
+
+
+def test_without_a_served_name_the_model_mounts_where_it_lives(tmp_path: Path) -> None:
+    assert ExLlamaAdapter().container_requirements({}).model_mount_target is None
+
+
+def test_the_quantization_check_still_reads_the_host_copy(tmp_path: Path) -> None:
+    model = _model(tmp_path / "store" / "exl2-model", quant_method="exl2")
+    with pytest.raises(ValueError):
+        ExLlamaAdapter().build_launch_args({"served_model_name": "renamed"}, model_path=str(model))
+
+
+@pytest.mark.parametrize("name", ["../etc", "a/b", ".", "..", "-flag", "with space", ""])
+def test_a_served_name_is_one_safe_path_component(name: str) -> None:
+    with pytest.raises(ValueError):
+        ExLlamaAdapter().validate_config({"served_model_name": name})
+
+
+def test_a_served_name_with_a_subdir_is_refused() -> None:
+    """TabbyAPI would report the subdirectory, not the name asked for."""
+    with pytest.raises(ValueError, match="model_subdir"):
+        ExLlamaAdapter().validate_config({"served_model_name": "qwen3", "model_subdir": "4.0bpw"})

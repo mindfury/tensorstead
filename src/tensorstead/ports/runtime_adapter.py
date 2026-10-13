@@ -192,6 +192,13 @@ class ContainerRequirements:
     # dedicated mechanism (``inference_credential_env``) precisely so they do
     # not travel through a general-purpose channel.
     environment: dict[str, str] = field(default_factory=dict)
+    # Where the deployment's model appears *inside* the container; ``None``
+    # mounts it at its host path. Only the destination is the adapter's: the
+    # source is still the store path the agent resolved and checked, so this
+    # cannot widen what a container sees -- it renames what the runtime is
+    # shown. TabbyAPI names a model after its directory, and the store's
+    # directory names are encoded tokens no client should have to quote.
+    model_mount_target: str | None = None
     # Docker network mode. ``host`` puts the container on the host's network
     # stack, which a distributed runtime rendezvousing over RDMA needs and an
     # ordinary one must not have.

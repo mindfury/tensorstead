@@ -7,6 +7,21 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **ExLlama `served_model_name`.** TabbyAPI names a model after its directory,
+  so ExLlama deployments were served as the store's encoded directory token
+  (`aHVnZ2luZ2ZhY2U6...`). Setting `served_model_name` mounts the model at
+  `/models/<name>` and serves it under that name. Adapters can now choose where
+  a model is mounted inside the container (`ContainerRequirements.model_mount_target`);
+  the mounted host path is still the one the agent resolved and checked.
+
+### Fixed
+- **Resource reports read the configured model store.** The fallback for
+  managed paths read `TENSORSTEAD_MODEL_STORE`, but the install sets
+  `TENSORSTEAD_MODEL_STORE_PATH`. The fallback now reads the installed name
+  first.
+
+
 ## [1.1.0] - 2026-10-12
 
 ### Added

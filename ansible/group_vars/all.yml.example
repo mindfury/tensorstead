@@ -6,6 +6,10 @@ tensorstead_root: /opt/tensorstead
 tensorstead_venv: /opt/tensorstead/venv
 tensorstead_config_dir: /etc/tensorstead
 tensorstead_service_user: tensorstead
+# IPv4 only. "::" is not a dual-stack alternative here: uvicorn listens via
+# asyncio, which sets IPV6_V6ONLY on an IPv6 socket whatever the kernel's
+# net.ipv6.bindv6only says, so "::" would stop IPv4 clients (and agents
+# reached over an IPv4 fabric) from connecting at all.
 tensorstead_coordinator_bind_host: 0.0.0.0
 tensorstead_coordinator_port: 8080
 tensorstead_mcp_bind_host: 0.0.0.0
