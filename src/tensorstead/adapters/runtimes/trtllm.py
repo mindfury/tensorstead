@@ -253,24 +253,46 @@ class TRTLLMAdapter:
                 "telemetry is on: TensorRT-LLM will send anonymous usage reports to "
                 "NVIDIA (events.gfe.nvidia.com)"
             )
+        newer = [
+            name
+            for name, value in (
+                ("served_model_name", validated.served_model_name),
+                ("kv_cache_dtype", validated.kv_cache_dtype),
+            )
+            if value is not None
+        ]
+        if newer:
+            notes.append(
+                f"{', '.join(newer)} requires TensorRT-LLM 1.3 or later: "
+                f"trtllm-serve 1.2.x has no such option and will refuse to start"
+            )
         return notes
 
     def container_requirements(
         self,
-        config: dict[str, Any],  # noqa: ARG002
+        config: dict[str, Any],
         position: object | None = None,  # noqa: ARG002
     ) -> ContainerRequirements:
-        """TensorRT-LLM's port, plus the container limits its own docs give.
+        """TensorRT-LLM's port, the container limits its own docs give, and telemetry.
 
         NVIDIA's ``docker run`` examples pass ``--ipc=host --ulimit memlock=-1
         --ulimit stack=67108864``. Shared memory is granted as a sized
         ``/dev/shm`` rather than the host's IPC namespace -- the same need,
         without exposing the host's IPC objects -- and the two limits as given.
+
+        Telemetry is turned off with ``TRTLLM_NO_USAGE_STATS=1``
+        (``tensorrt_llm/commands/_telemetry.py``, 1.3) rather than
+        ``--no-telemetry``: 1.2.x has neither telemetry nor the flag, and
+        refuses the unknown flag, while an unknown variable is simply unread.
+        One mechanism therefore holds on every current release.
         """
+        validated = TRTLLMConfig.model_validate(config or {}, context=validated_context())
+        environment = {} if validated.telemetry else {"TRTLLM_NO_USAGE_STATS": "1"}
         return ContainerRequirements(
             api_port=_DEFAULT_API_PORT,
             shm_size=8 * 1024**3,
             ulimits={"memlock": (-1, -1), "stack": (67108864, 67108864)},
+            environment=environment,
         )
 
     def schema_probe(self) -> SchemaProbe | None:
@@ -325,7 +347,9 @@ class TRTLLMAdapter:
             args.append("--enable_chunked_prefill")
         if validated.trust_remote_code:
             args.append("--trust_remote_code")
-        args.append("--telemetry" if validated.telemetry else "--no-telemetry")
+        # Telemetry is switched by environment, not by flag: see
+        # container_requirements. ``--no-telemetry`` exists only from 1.3, and
+        # passing it to 1.2.x -- the current stable line -- fails every start.
         # Forwarded last, in the spelling the operator wrote. TensorRT-LLM's
         # flags mix ``--max_batch_size`` and ``--generation-config`` and click
         # does not treat ``_`` and ``-`` as equal, so normalizing either way
