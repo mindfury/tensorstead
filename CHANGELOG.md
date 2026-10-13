@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-12
+
 ### Added
 - **ExLlama runtime** (`exllama`, single-node) — serves EXL3-quantized and
   unquantized models through TabbyAPI. EXL2 and GPTQ models are refused before
@@ -120,5 +122,6 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.1.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.1.0
 [1.0.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.0
