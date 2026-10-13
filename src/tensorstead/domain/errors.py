@@ -122,6 +122,29 @@ class EndpointConflictError(DomainError):
     code = "endpoint_conflict"
 
 
+class ModelChangeRefusedError(DomainError):
+    """A modify would change the model of a deployment that is meant to run.
+
+    An in-place model swap keeps the deployment's name, endpoint, runtime
+    config and host config, all of which were chosen for the old model; one
+    applied by an agent to a running deployment and then restarted crashed on
+    warmup with the previous model's host config. A different model is a new
+    deployment. Stopping first remains possible and is a deliberate act.
+    """
+
+    code = "model_change_refused"
+
+
+class ServedNameConflictError(DomainError):
+    """Another running deployment already serves under the same model name.
+
+    Clients and gateways that route by model name cannot tell the two apart;
+    requests meant for one silently reach the other.
+    """
+
+    code = "served_name_conflict"
+
+
 class RuntimeNotDistributedError(DomainError):
     """Multi-node requested for a runtime that cannot distribute."""
 

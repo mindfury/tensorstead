@@ -69,3 +69,24 @@ Constraints an agent should expect:
 - An unpinned base is reported as unreproducible and never refused.
 - A build returns `image_id`, not `digest`: a locally produced image has no
   registry digest.
+
+## Runbooks for agents
+
+Multi-step changes have runbooks the MCP server serves directly, so an agent
+can read the procedure from the same place it acts: `runbook_list` names them
+and `runbook_get` returns one. The server's instructions point agents at
+`runbook_get('model-swap')` before any change to which model a deployment
+serves; the text is the same as [docs/model-swap.md](model-swap.md).
+
+Two guardrails back the model-swap runbook on the server side, whatever the
+client:
+
+- changing `model_id` on a running deployment is refused with
+  `model_change_refused` (409) — a different model is a new deployment;
+- starting or restarting a deployment whose declared served model name is
+  already served by another running deployment is refused with
+  `served_name_conflict` (409). A restart is checked before it stops anything.
+
+For agent hosts that load skills, `skills/tensorstead-model-swap/SKILL.md` is
+the short form of the runbook and sends the agent to `runbook_get` for the
+rest.

@@ -348,9 +348,11 @@ async def _check_mcp_http_session(ca: ssl.SSLContext, token: str, settings: Smok
 
 def _expected_tool_names() -> list[str]:
     """Return the MCP tool name for every catalogued management operation."""
+    from tensorstead.mcp.tools import NON_CATALOGUE_TOOLS
     from tensorstead.service.registry import all_operations
 
-    return [f"{operation.noun}_{operation.verb}" for operation in all_operations()]
+    catalogued = [f"{operation.noun}_{operation.verb}" for operation in all_operations()]
+    return catalogued + sorted(NON_CATALOGUE_TOOLS)
 
 
 def _check_inference(inference_key: str | None, settings: SmokeSettings) -> None:

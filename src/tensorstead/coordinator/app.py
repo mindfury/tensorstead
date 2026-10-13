@@ -43,6 +43,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "operation_unsupported_by_agent": 409,
     "still_referenced": 409,
     "endpoint_conflict": 409,
+    "model_change_refused": 409,
+    "served_name_conflict": 409,
     "runtime_not_distributed": 422,
     "node_reserved": 422,
     "invalid_agent_endpoint": 422,
