@@ -271,7 +271,8 @@ class ExLlamaAdapter:
             "TabbyAPI project's published image; not verified on this estate. "
             "x86_64 only: TabbyAPI pins exllamav3 wheels for x86_64 Linux and "
             "Windows, none for aarch64, so this image does not run on a DGX Spark "
-            "or other ARM node -- build one there with `image build`. Pin a digest "
+            "or other ARM node -- build one there with `image build`; a recipe "
+            "verified on a DGX Spark in 2026-10 is in docs/builds.md. Pin a digest "
             "you have tested rather than a moving tag.",
         ),
     )

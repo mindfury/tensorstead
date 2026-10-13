@@ -170,3 +170,47 @@ Three things that cost time, so they are written down:
   distribute is not implemented, so the same spec built on two nodes yields two
   different image identifiers. Fine for a repair; not fine if you are relying
   on identifiers matching across nodes.
+
+### Runtime images for a DGX Spark (arm64, GB10)
+
+Recipes verified on a DGX Spark in October 2026. Pin by digest as shown; a
+newer tag is a new recipe, not an edit to this one.
+
+**TensorRT-LLM.** NVIDIA's release image runs as published. Both the current
+stable line (1.2.x) and 1.3 serve. The adapter's `served_model_name` and
+`kv_cache_dtype` need 1.3 or later, and `config_advisories` says so when either
+is set.
+
+```sh
+stead buildspec set trtllm-1.2.1-arm64 \
+  --base 'nvcr.io/nvidia/tensorrt-llm/release@sha256:33cd085b772947bd22b7273886539331420404e5d2a4a039945241945ff927b9'
+stead image build trtllm-1.2.1-arm64 --node spark-alpha.internal \
+  --reference local/trtllm:1.2.1
+```
+
+**ExLlama (TabbyAPI).** TabbyAPI's published image is x86_64 only, and its
+dependency list pins exllamav3 and torch wheels for x86_64, so on arm64 the
+image is built on the node: the TensorRT-LLM image above supplies a CUDA 13
+toolchain and a torch that targets GB10, exllamav3 is compiled for `sm_121`
+(the longest step), and TabbyAPI is copied into the image's working directory,
+because the adapter runs `python3 main.py` from there. `uvloop` is installed
+explicitly: TabbyAPI declares it for x86_64 only but imports it on every
+non-Windows platform.
+
+```sh
+stead buildspec set exllama-tabby-arm64 \
+  --base 'nvcr.io/nvidia/tensorrt-llm/release@sha256:33cd085b772947bd22b7273886539331420404e5d2a4a039945241945ff927b9' \
+  --step 'git clone https://github.com/theroyallab/tabbyAPI.git /tmp/tabbyAPI && git -C /tmp/tabbyAPI checkout 2636ef602b55b5343cf3740dd55a77f21e0a8003 && cp -a /tmp/tabbyAPI/. /app/tensorrt_llm/ && rm -rf /tmp/tabbyAPI' \
+  --step 'TORCH_CUDA_ARCH_LIST=12.1 MAX_JOBS=16 python3 -m pip install --no-cache-dir --no-build-isolation --root-user-action=ignore git+https://github.com/turboderp-org/exllamav3.git@f45b84512ba65bca77f7d394399d4b68821fc71b' \
+  --step 'cd /app/tensorrt_llm && python3 -m pip install --no-cache-dir --root-user-action=ignore --no-deps . && python3 -c "import tomllib; d = tomllib.load(open(\"pyproject.toml\", \"rb\"))[\"project\"][\"dependencies\"]; open(\"/tmp/req.txt\", \"w\").write(chr(10).join(x for x in d if not x.split()[0].startswith((\"torch\", \"exllamav3\", \"flash\"))))" && python3 -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/req.txt uvloop' \
+  --step 'cd /app/tensorrt_llm && python3 -c "import exllamav3, torch, uvloop" && python3 main.py --help >/dev/null'
+stead image build exllama-tabby-arm64 --node spark-alpha.internal \
+  --reference local/exllama-tabby:1.6.1
+```
+
+The build cannot import exllamav3's CUDA extension against a GPU -- a Docker
+build has none -- so the last step checks that the packages import and that
+TabbyAPI parses its arguments; whether it loads a model is the deployment's
+first start. Serve an EXL3 model (`turboderp/Qwen3-8B-exl3`, for example, at
+a pinned `4.0bpw` revision); EXL2 and GPTQ are refused before the container
+starts.

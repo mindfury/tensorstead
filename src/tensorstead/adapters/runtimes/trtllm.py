@@ -165,9 +165,10 @@ class TRTLLMAdapter:
         SuggestedImage(
             "nvcr.io/nvidia/tensorrt-llm/release:<version>",
             "NVIDIA's published release image on NGC; replace <version> with a "
-            "release tag from the NGC catalog. Not verified on this estate. Confirm "
-            "the tag you choose is published for your architecture (arm64 for a DGX "
-            "Spark), then pin it by digest.",
+            "release tag from the NGC catalog. 1.2.1 and 1.3.0rc29 verified on a "
+            "DGX Spark (arm64) in 2026-10; served_model_name and kv_cache_dtype "
+            "need 1.3 or later. Confirm the tag is published for your "
+            "architecture, then pin it by digest (docs/builds.md).",
         ),
     )
 

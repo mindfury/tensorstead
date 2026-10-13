@@ -40,6 +40,19 @@ is versioned separately (`stead status` reports both).
   entrypoint performs; on release 1.2.1 `import tensorrt` then failed
   (`libnvonnxparser.so.10`) and every deployment exited at startup. It now runs
   `trtllm-serve` through `/opt/nvidia/nvidia_entrypoint.sh`.
+- **TensorRT-LLM 1.2.x (the current stable line) starts.** The adapter always
+  passed `--no-telemetry`, which exists only from 1.3, so every 1.2.x start
+  failed at argument parsing. Telemetry is now switched off with
+  `TRTLLM_NO_USAGE_STATS=1`, which 1.3 honours and 1.2.x (which has no
+  telemetry) never reads. `served_model_name` and `kv_cache_dtype` remain 1.3+
+  and now raise a config advisory saying so. Verified serving on a DGX Spark
+  with 1.2.1 and 1.3.0rc29.
+
+### Documentation
+- **Verified arm64 runtime images** (`docs/builds.md`): pinned recipes for
+  TensorRT-LLM and for ExLlama/TabbyAPI built on a DGX Spark, including the
+  exllamav3 `sm_121` build and TabbyAPI's undeclared `uvloop` dependency on
+  arm64.
 
 ### Changed
 - **Inference keys are optional everywhere.** The Ansible install no longer
