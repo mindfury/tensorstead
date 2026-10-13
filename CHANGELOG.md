@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-12
+
 ### Added
 - **ExLlama `served_model_name`.** TabbyAPI names a model after its directory,
   so ExLlama deployments were served as the store's encoded directory token
@@ -137,6 +139,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.2.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.2.0
 [1.1.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.1.0
 [1.0.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.0
