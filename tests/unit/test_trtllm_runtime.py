@@ -44,13 +44,28 @@ def test_the_entrypoint_is_trtllm_serve() -> None:
 
 
 def test_telemetry_is_off_unless_asked_for() -> None:
-    """TensorRT-LLM reports usage to NVIDIA by default."""
-    off = TRTLLMAdapter().build_launch_args({}, model_path="/m")
-    on = TRTLLMAdapter().build_launch_args({"telemetry": True}, model_path="/m")
-    assert "--no-telemetry" in off
-    assert "--telemetry" not in off
-    assert "--telemetry" in on
-    assert "--no-telemetry" not in on
+    """TensorRT-LLM reports usage to NVIDIA by default (1.3 onwards)."""
+    off = TRTLLMAdapter().container_requirements({})
+    on = TRTLLMAdapter().container_requirements({"telemetry": True})
+    assert off.environment == {"TRTLLM_NO_USAGE_STATS": "1"}
+    assert "TRTLLM_NO_USAGE_STATS" not in on.environment
+
+
+def test_no_telemetry_flag_reaches_trtllm_serve() -> None:
+    """``--no-telemetry`` exists only from 1.3; 1.2.x refuses it and never starts."""
+    for config in ({}, {"telemetry": True}):
+        args = TRTLLMAdapter().build_launch_args(config, model_path="/m")
+        assert not [a for a in args if "telemetry" in a]
+
+
+def test_options_newer_than_the_stable_line_are_advised() -> None:
+    adapter = TRTLLMAdapter()
+    quiet = adapter.config_advisories({"kv_cache_free_gpu_memory_fraction": 0.5})
+    assert not [n for n in quiet if "1.3" in n]
+    noted = adapter.config_advisories(
+        {"kv_cache_free_gpu_memory_fraction": 0.5, "served_model_name": "m"}
+    )
+    assert [n for n in noted if "served_model_name requires TensorRT-LLM 1.3" in n]
 
 
 def test_the_default_telemetry_setting_leaves_no_trace_in_the_record() -> None:
