@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-13
+
 ### Added
 - **Model-swap guardrails.** Changing `model_id` on a running deployment is
   refused (`model_change_refused`, 409): a different model is a new deployment.
@@ -159,6 +161,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.3.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.2.0
 [1.1.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.1.0
 [1.0.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.0.1
