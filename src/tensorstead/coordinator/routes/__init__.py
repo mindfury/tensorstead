@@ -25,6 +25,7 @@ from tensorstead.contracts.api import (
     DeploymentModifyResponse,
     DeploymentObserved,
     DeploymentObservedPerNode,
+    DeploymentRenameRequest,
     DeploymentResponse,
     DeploymentRuntimeResponse,
     DeploymentStatusResponse,
@@ -1039,6 +1040,19 @@ def modify_deployment(
         expected_revision=payload.expected_revision,
     )
     return DeploymentModifyResponse(**result)
+
+
+@router.post(
+    "/deployments/{deployment_id}:rename",
+    response_model=DeploymentResponse,
+    dependencies=[Depends(require_auth_dep)],
+)
+def rename_deployment(
+    deployment_id: str, payload: DeploymentRenameRequest, request: Request
+) -> DeploymentResponse:
+    """Change a deployment's name. Id, revisions, containers and serving are unchanged."""
+    _deployments_service(request).rename(deployment_id, payload.name)
+    return _deployment_response(request, deployment_id)
 
 
 @router.get(

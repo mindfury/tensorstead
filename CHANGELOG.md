@@ -7,6 +7,22 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **`deployment rename`.** Available on the API (`POST /v1/deployments/{id}:rename`),
+  the CLI (`stead deployment rename NAME NEW_NAME`) and MCP (`deployment_rename`).
+  It changes the name and nothing else: id, revisions, containers, served model
+  name and observed state are untouched, so it is safe while running and needs
+  no restart. Names were write-once so that a deployment repointed at another
+  model kept its handle. Since 1.3.0 refuses that repointing, names can say what
+  a deployment serves. A rename target is 1-128 letters, digits, `.`, `_` or `-`.
+
+### Fixed
+- **Creating a deployment under a name another deployment holds is refused**
+  with `already_exists` (409). Before, the request reached the store, whose
+  `INSERT OR REPLACE` on the unique name asked SQLite to delete the other
+  deployment's row. Only that row's revisions' foreign keys prevented it, and
+  the request failed as a bare integrity error.
+
 ## [1.3.0] - 2026-10-13
 
 ### Added

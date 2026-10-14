@@ -219,12 +219,12 @@ class CredentialDeleteResponse(ClientContractModel):
 
 
 class DeploymentCreateRequest(ClientContractModel):
-    # Chosen once and never changed. It is unique, it is the handle every
-    # surface resolves a deployment by, and ``DeploymentModifyRequest`` omits
-    # it deliberately rather than by oversight: a deployment
-    # repointed to a different model keeps its name, the way a host keeps its
-    # hostname when it is reimaged. Read the model from the revision, not from
-    # this.
+    # Unique, and the handle every surface resolves a deployment by.
+    # ``DeploymentModifyRequest`` still omits it: a name is changed with
+    # ``deployment rename``, which touches nothing else. It used to be
+    # write-once so a deployment repointed at another model kept its handle;
+    # changing the model of a running deployment is now refused, so the name
+    # can say what the deployment serves instead.
     name: str
     model_id: str
     runtime_type: str
@@ -242,6 +242,12 @@ class DeploymentCreateRequest(ClientContractModel):
     # its node's GPU driver and was restored into the same deadlock on every
     # subsequent boot, which is how a recoverable incident became a reimage.
     restore_on_boot: bool = False
+
+
+class DeploymentRenameRequest(ClientContractModel):
+    """``POST /v1/deployments/{id}:rename`` -- the new name, and nothing else."""
+
+    name: str
 
 
 class DeploymentModifyRequest(ClientContractModel):

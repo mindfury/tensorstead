@@ -99,6 +99,9 @@ _OPERATIONS: list[Operation] = [
     ),
     Operation("deployment.create", "deployment", "create", "Define a deployment; host untouched"),
     Operation("deployment.modify", "deployment", "modify", "New numbered revision"),
+    Operation(
+        "deployment.rename", "deployment", "rename", "Change the name only; nothing restarts"
+    ),
     Operation("deployment.list", "deployment", "list", "List declared deployments"),
     Operation("deployment.get", "deployment", "get", "Declared + observed, distinguishable"),
     Operation("deployment.revisions", "deployment", "revisions", "List retained revisions"),

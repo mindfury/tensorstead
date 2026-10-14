@@ -43,6 +43,7 @@ _EXPECTED_OPERATIONS = {
     "credential.delete",
     "deployment.create",
     "deployment.modify",
+    "deployment.rename",
     "deployment.list",
     "deployment.get",
     "deployment.revisions",
@@ -157,6 +158,8 @@ def _route_to_operation(path: str, methods: set[str]) -> str | None:
         return "deployment.restart"
     if path.startswith("/v1/deployments/") and path.endswith(":reconcile"):
         return "deployment.reconcile"
+    if path.startswith("/v1/deployments/") and path.endswith(":rename"):
+        return "deployment.rename"
     if path == "/v1/deployments:create-from-export":
         return None  # re-import maps onto deployment.create
     if path.startswith("/v1/deployments/") and path.endswith("/revisions"):

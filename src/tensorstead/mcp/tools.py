@@ -670,6 +670,23 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         }
         return client.request("PATCH", f"/v1/deployments/{deployment_id}", json=payload)
 
+    @server.tool(name="deployment_rename")
+    def deployment_rename(
+        deployment_id: Annotated[str, Field(description="Deployment id from deployment_list.")],
+        name: Annotated[
+            str,
+            Field(description="New name: letters, digits, '.', '_' or '-', up to 128."),
+        ],
+    ) -> ApiResult:
+        """Rename a deployment. Nothing else changes and nothing restarts.
+
+        The id, revisions, containers and served model name stay as they are.
+        A name another deployment holds is refused (``already_exists``).
+        """
+        return client.request(
+            "POST", f"/v1/deployments/{deployment_id}:rename", json={"name": name}
+        )
+
     @server.tool(name="deployment_list")
     def deployment_list() -> ApiResult:
         """List declared deployments.
