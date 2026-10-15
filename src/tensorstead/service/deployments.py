@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import re
 from dataclasses import replace as deploy_replace
 from datetime import datetime
 from typing import Any
 
 from tensorstead.domain.errors import (
+    AlreadyExistsError,
     EndpointConflictError,
     InvalidDeploymentError,
     ModelChangeRefusedError,
@@ -45,6 +47,10 @@ from tensorstead.domain.served_name import declared_served_name
 from tensorstead.ports.repository import Repository
 from tensorstead.service.approvals import authorize_code_options
 from tensorstead.service.nodes import refuse_if_node_reserved
+
+# A rename's target. Creation has never constrained names, and existing ones
+# all fit this; a rename is where a constraint costs nobody anything.
+_DEPLOYMENT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 class DeploymentService:
@@ -126,6 +132,7 @@ class DeploymentService:
 
         # Endpoint-collision refusal on identity grounds.
         self._check_endpoint_conflict(participating_nodes, endpoint, exclude_deployment=None)
+        self._check_name_available(name, exclude_deployment=None)
 
         deployment_id = new_ulid()
         now = datetime.now().astimezone()
@@ -398,6 +405,46 @@ class DeploymentService:
                     f"{deployment.name!r} on the same node",
                     detail={"conflicting_deployment": deployment.name, "endpoint": endpoint},
                 )
+
+    def _check_name_available(self, name: str, *, exclude_deployment: str | None) -> None:
+        """Refuse a name another deployment holds, before the store sees it.
+
+        The store writes deployments with ``INSERT OR REPLACE`` and ``name`` is
+        unique, so a clash would ask SQLite to delete the other deployment's
+        row. Its revisions' foreign keys block that today, which surfaces as a
+        bare integrity error; this names the conflict instead, and does not
+        rely on the foreign key to keep a deployment.
+        """
+        for other in self._repo.list_deployments():
+            if other.name == name and other.id != exclude_deployment:
+                raise AlreadyExistsError(
+                    f"a deployment named {name!r} already exists",
+                    detail={"name": name, "deployment_id": other.id},
+                )
+
+    def rename(self, deployment_id: str, name: str) -> Deployment:
+        """Give a deployment a new name. Nothing else changes.
+
+        The id, every revision, the running containers (named by id), the
+        served model name and observed state are untouched, so a rename needs
+        no restart and is safe while running. Names were once write-once, so
+        that a deployment repointed at another model kept its handle; with
+        model changes on running deployments refused, the name can instead
+        say what the deployment serves.
+        """
+        new_name = (name or "").strip()
+        if not _DEPLOYMENT_NAME_RE.fullmatch(new_name):
+            raise InvalidDeploymentError(
+                f"deployment name {name!r} must be 1-128 characters of letters, digits, "
+                f"'.', '_' or '-', starting with a letter or digit"
+            )
+        deployment = self.get(deployment_id)
+        if deployment.name == new_name:
+            return deployment
+        self._check_name_available(new_name, exclude_deployment=deployment.id)
+        renamed = deploy_replace(deployment, name=new_name)
+        self._repo.save_deployment(renamed)
+        return renamed
 
     def _model_label(self, model_id: str | None) -> str:
         """``source:model`` for messages, falling back to the bare id."""

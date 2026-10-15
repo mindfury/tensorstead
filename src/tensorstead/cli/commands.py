@@ -1079,6 +1079,25 @@ def _parse_runtime_config(values: list[str]) -> dict[str, object]:
     return config
 
 
+@deployments_app.command("rename")
+def deployment_rename(
+    name: Annotated[str, typer.Argument(help="Current name or id.")],
+    new_name: Annotated[str, typer.Argument(help="New name.")],
+    json_mode: Annotated[
+        bool, typer.Option("--json", help="Emit JSON for machine consumption.")
+    ] = False,
+) -> None:
+    """Rename a deployment. Id, revisions and serving are unchanged; nothing restarts."""
+    deployment = _get_deployment(name)
+    _run(
+        "POST",
+        f"/v1/deployments/{deployment['id']}:rename",
+        {"name": new_name},
+        json_mode,
+        expected=200,
+    )
+
+
 @deployments_app.command("revisions")
 def deployment_revisions(
     name: Annotated[str, typer.Argument()],

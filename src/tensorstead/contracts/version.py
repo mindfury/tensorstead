@@ -185,6 +185,7 @@ OP_CREDENTIAL_LIST = "credential.list"
 OP_CREDENTIAL_DELETE = "credential.delete"
 OP_DEPLOYMENT_CREATE = "deployment.create"
 OP_DEPLOYMENT_MODIFY = "deployment.modify"
+OP_DEPLOYMENT_RENAME = "deployment.rename"
 OP_DEPLOYMENT_LIST = "deployment.list"
 OP_DEPLOYMENT_GET = "deployment.get"
 OP_DEPLOYMENT_REVISIONS = "deployment.revisions"
@@ -240,6 +241,8 @@ OPERATION_MINIMUM_VERSIONS: dict[str, tuple[int, int]] = {
     OP_CREDENTIAL_DELETE: _min(1, 0),
     OP_DEPLOYMENT_CREATE: _min(1, 0),
     OP_DEPLOYMENT_MODIFY: _min(1, 0),
+    # Coordinator-only: no agent is contacted, so any agent contract will do.
+    OP_DEPLOYMENT_RENAME: _min(1, 0),
     OP_DEPLOYMENT_LIST: _min(1, 0),
     OP_DEPLOYMENT_GET: _min(1, 0),
     OP_DEPLOYMENT_REVISIONS: _min(1, 0),
