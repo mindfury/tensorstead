@@ -20,10 +20,10 @@ cross-runtime config union, so llama.cpp's ``n_gpu_layers`` and vLLM's
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from tensorstead.adapters.runtimes.extra_args import authorize_extra_arg, normalize_flag
 from tensorstead.ports.runtime_adapter import (
@@ -48,7 +48,33 @@ _FORBIDDEN_EXTRA_ARGS: dict[str, str] = {
     "api-key": "the inference credential is delivered as environment, never argv",
     "host": "the endpoint is declared on the deployment",
     "port": "the endpoint is declared on the deployment",
+    # A drafter named here would be read from a path the agent never mounted.
+    "model-draft": "name the drafter with draft_model, which the agent mounts",
+    "spec-draft-model": "name the drafter with draft_model, which the agent mounts",
+    "md": "name the drafter with draft_model, which the agent mounts",
 }
+
+# ``--spec-type`` values in llama.cpp 0.6 (``llama-server --help``). The draft-*
+# types read a separate drafter; draft-mtp uses the model's own MTP layers and
+# the ngram-* types use the context itself.
+_SPEC_TYPES = frozenset(
+    {
+        "none",
+        "draft-simple",
+        "draft-eagle3",
+        "draft-mtp",
+        "draft-dflash",
+        "draft-dspark",
+        "ngram-simple",
+        "ngram-map-k",
+        "ngram-map-k4v",
+        "ngram-mod",
+        "ngram-cache",
+    }
+)
+_SPEC_TYPES_NEEDING_DRAFTER = frozenset(
+    {"draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark"}
+)
 
 
 class LlamaCppConfig(BaseModel):
@@ -81,6 +107,25 @@ class LlamaCppConfig(BaseModel):
     parallel: int | None = Field(default=None, ge=1)
     flash_attn: bool | None = None
 
+    # Speculative decoding. On a node where a single stream is bound by memory
+    # bandwidth -- a DGX Spark reads every weight once per token -- drafting is
+    # the main way to go faster, and llama.cpp 0.6 drafts with DFlash, EAGLE-3,
+    # DSpark, MTP or n-grams.
+    #
+    # Only the drafter is modelled, because only the drafter needs the
+    # product: it is a second set of weights the agent must mount.
+    # ``draft_model`` is its acquired model *directory* in the node's store, the
+    # same convention as vLLM's ``speculative_config.model`` and SGLang's
+    # ``speculative_draft_model_path``: the agent mounts it only if it resolves
+    # inside its own store. ``draft_model_file`` picks the .gguf within it when
+    # there are several, exactly as ``model_file`` does for the target.
+    #
+    # The type and draft length stay where published recipes already put them,
+    # in ``extra_args`` (``spec-type``, ``spec-draft-n-max``); the agreement
+    # check below reads the type from there.
+    draft_model: str | None = Field(default=None, min_length=1)
+    draft_model_file: str | None = Field(default=None, min_length=1)
+
     # Flags this product does not model, forwarded verbatim.
     #
     # llama.cpp had the same closed allowlist vLLM did -- six fields and
@@ -93,6 +138,68 @@ class LlamaCppConfig(BaseModel):
     # Recorded as unvalidated, because it is. This product does not have
     # llama-server's real surface, and llama.cpp moves faster than this file.
     extra_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+    @field_validator("draft_model")
+    @classmethod
+    def _check_draft_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        path = PurePosixPath(value)
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError(
+                f"draft_model {value!r} must be the absolute path of an acquired model "
+                f"directory in the node's model store"
+            )
+        return value
+
+    @field_validator("draft_model_file")
+    @classmethod
+    def _check_draft_model_file(cls, value: str | None) -> str | None:
+        if value is not None:
+            path = PurePosixPath(value)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(
+                    f"draft_model_file {value!r} must be a relative path inside draft_model"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _drafter_and_type_agree(self) -> LlamaCppConfig:
+        """Refuse a drafter that would be loaded and never used, or a type with none.
+
+        ``--spec-type`` defaults to ``none``: a drafter without a type is read
+        into memory and ignored, and a drafting type without a drafter fails at
+        start. Both are refused here, before a container exists.
+        """
+        raw = next(
+            (
+                str(value)
+                for key, value in self.extra_args.items()
+                if key.strip().lstrip("-").replace("_", "-") == "spec-type"
+            ),
+            "",
+        )
+        types = {t.strip() for t in raw.split(",")} - {""}
+        unknown = types - _SPEC_TYPES
+        if unknown and (self.draft_model is not None or types & _SPEC_TYPES_NEEDING_DRAFTER):
+            raise ValueError(
+                f"spec-type {', '.join(sorted(unknown))} is not one llama.cpp 0.6 accepts: "
+                f"{', '.join(sorted(_SPEC_TYPES))}"
+            )
+        needs = types & _SPEC_TYPES_NEEDING_DRAFTER
+        if self.draft_model is not None and not needs:
+            raise ValueError(
+                "draft_model is set but extra_args spec-type names no drafting type: set "
+                f"spec-type to one of {', '.join(sorted(_SPEC_TYPES_NEEDING_DRAFTER))} "
+                "(for a DFlash drafter, draft-dflash)"
+            )
+        if needs and self.draft_model is None:
+            raise ValueError(
+                f"spec-type {', '.join(sorted(needs))} needs a drafter: set draft_model"
+            )
+        if self.draft_model_file is not None and self.draft_model is None:
+            raise ValueError("draft_model_file needs draft_model")
+        return self
 
     @field_validator("extra_args")
     @classmethod
@@ -319,7 +426,7 @@ class LlamaCppAdapter:
 
     def container_requirements(
         self,
-        config: dict[str, Any],  # noqa: ARG002
+        config: dict[str, Any],
         position: object | None = None,  # noqa: ARG002
     ) -> ContainerRequirements:
         """llama.cpp needs nothing beyond the default container, but its own port.
@@ -337,7 +444,10 @@ class LlamaCppAdapter:
         runtime-agnostic layer holding one runtime's fact, which is the mistake
         this seam exists to prevent.
         """
-        return ContainerRequirements(api_port=8080)
+        drafter = LlamaCppConfig(**(config or {})).draft_model
+        # A drafter is a second set of weights this container reads; naming it
+        # here is what lets the agent decide whether to mount it.
+        return ContainerRequirements(api_port=8080, model_references=[drafter] if drafter else [])
 
     def schema_probe(self) -> SchemaProbe | None:
         """No probe declared for llama.cpp.
@@ -426,6 +536,20 @@ class LlamaCppAdapter:
             # expressible, which a bare flag could only ever say by omission --
             # and omission means "auto" here, not "off".
             args += ["--flash-attn", "on" if validated.flash_attn else "off"]
+        if validated.draft_model is not None:
+            if not Path(validated.draft_model).is_dir():
+                # _resolve_gguf falls through for a missing directory, which is
+                # right for the target (validate_model_path speaks first) but not
+                # here: the agent would skip the mount and llama-server would
+                # fail on a path that names nothing.
+                raise ValueError(
+                    f"draft_model {validated.draft_model!r} is not a model directory on "
+                    f"this node; acquire the drafter to this node and use its store path"
+                )
+            args += [
+                "--model-draft",
+                _resolve_gguf(validated.draft_model, validated.draft_model_file),
+            ]
         # Forwarded last and verbatim, so reading the generated argv shows
         # plainly where this product's opinions end and the operator's begin.
         for key, value in validated.extra_args.items():
