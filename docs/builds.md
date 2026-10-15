@@ -210,6 +210,31 @@ A nested setting such as `extra_args` needs the single-JSON form of `--config`;
 `key=value` pairs carry strings. llama.cpp enforces a node inference key when
 the node has one, so clients send `Authorization: Bearer <key>`.
 
+**llama.cpp with a speculative-decoding drafter.** A single stream on a GB10
+reads every weight once per token, so a 17.6 GB GGUF tops out near 15 tokens/s
+on its own. A DFlash2 drafter more than doubles that. Acquire the drafter like
+any model, then name its store directory as `draft_model`; the agent mounts it
+read-only beside the target. The type and length go in `extra_args`, as in the
+drafter's own instructions:
+
+```sh
+stead model acquire --source huggingface --id z-lab/Qwen3.8-27B-DFlash2-GGUF \
+  --revision 2d9571f8ce46e151f61c6499c99dee6079e1d610 \
+  --file 'Qwen3.8-27B-DFlash2-Q4_K_M.gguf' --node spark-alpha.internal
+stead deployment modify qwen3.8-27b-ud-q4_k_xl-llamacpp --config '{
+  "draft_model": "/var/lib/tensorstead/models/<drafter token>",
+  "extra_args": {"alias": "qwen3.8-27b-ud-q4kxl",
+                 "spec-type": "draft-dflash", "spec-draft-n-max": 7}}'
+```
+
+`<drafter token>` is the store's directory name for the drafter: the URL-safe
+base64 of `huggingface:<repo>` (plus `#<digest>` for a file selection), as
+`ls` of the model store shows. `extra_args` is replaced as a whole on modify,
+so repeat any keys that should stay, such as the alias. Measured on a GB10 with
+Unsloth's Qwen3.8-27B UD-Q4_K_XL: 11.6 tokens/s without the drafter, and with
+it 26.9 on prose (29% of drafted tokens accepted) and 51.1 on code (70%). That
+matches the NVFP4 model on SGLang with the same drafter.
+
 **ExLlama (TabbyAPI).** TabbyAPI's published image is x86_64 only, and its
 dependency list pins exllamav3 and torch wheels for x86_64, so on arm64 the
 image is built on the node: the TensorRT-LLM image above supplies a CUDA 13
