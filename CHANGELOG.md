@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-14
+
 ### Added
 - **`deployment rename`.** Available on the API (`POST /v1/deployments/{id}:rename`),
   the CLI (`stead deployment rename NAME NEW_NAME`) and MCP (`deployment_rename`).
@@ -177,6 +179,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.4.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.4.0
 [1.3.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.2.0
 [1.1.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.1.0
