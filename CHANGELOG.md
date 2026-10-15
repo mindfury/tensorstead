@@ -7,6 +7,13 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Documentation
+- **llama.cpp on a DGX Spark.** The suggested image is now
+  `ghcr.io/ggml-org/llama.cpp:server-cuda`, which runs on a GB10 as published,
+  replacing the CPU-only `light` tag under the project's former organisation.
+  `docs/builds.md` shows acquiring one GGUF quantization with `--file` and
+  deploying it. Verified with Unsloth's Qwen3.8-27B UD-Q4_K_XL.
+
 ## [1.4.0] - 2026-10-14
 
 ### Added
