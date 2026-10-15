@@ -223,11 +223,12 @@ class LlamaCppAdapter:
     # make and test (the no-scheduling rule).
     suggested_images = (
         SuggestedImage(
-            "ghcr.io/ggerganov/llama.cpp:light",
-            "llama.cpp project's published server image; not verified on this "
-            "estate. llama.cpp releases more often than this product tracks -- "
-            "pin a tag you have tested rather than a moving label, and prefer "
-            "`image list` once pulled.",
+            "ghcr.io/ggml-org/llama.cpp:server-cuda",
+            "llama.cpp project's CUDA server image (amd64 and arm64). Verified on a "
+            "DGX Spark (GB10) in 2026-10 serving a GGUF at the same speed as a "
+            "source build for sm_121. llama.cpp releases more often than this "
+            "product tracks -- pin the digest you tested rather than the moving "
+            "tag (docs/builds.md).",
         ),
     )
 

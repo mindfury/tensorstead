@@ -188,6 +188,28 @@ stead image build trtllm-1.2.1-arm64 --node spark-alpha.internal \
   --reference local/trtllm:1.2.1
 ```
 
+**llama.cpp (GGUF).** The project's `server-cuda` image is published for
+arm64 and runs on a GB10 as published: pull it, pin it by digest, and use it as
+the deployment's image directly. No build spec is needed. A source build for
+`sm_121` served the same GGUF no faster (12.1 vs 11.6 tokens/s, Qwen3.8-27B
+UD-Q4_K_XL). Acquire one quantization from a GGUF repository with `--file`,
+since a repository ships twenty or more:
+
+```sh
+stead model acquire --source huggingface --id unsloth/Qwen3.8-27B-GGUF \
+  --revision 4ca720788d1e01f1bff70c033e0d0028fd02e502 \
+  --file 'Qwen3.8-27B-UD-Q4_K_XL.gguf' --node spark-alpha.internal
+stead deployment create --name qwen3.8-27b-ud-q4_k_xl-llamacpp \
+  --model <model id> --runtime llamacpp --node spark-alpha.internal \
+  --image 'ghcr.io/ggml-org/llama.cpp@sha256:b0baccbe2e00b5d74e63f85f9f023c93d61d0f329475269e1e7002e87eb875ea' \
+  --endpoint spark-alpha.internal:8133 \
+  --config '{"ctx_size": 32768, "flash_attn": true, "extra_args": {"alias": "qwen3.8-27b-ud-q4kxl"}}'
+```
+
+A nested setting such as `extra_args` needs the single-JSON form of `--config`;
+`key=value` pairs carry strings. llama.cpp enforces a node inference key when
+the node has one, so clients send `Authorization: Bearer <key>`.
+
 **ExLlama (TabbyAPI).** TabbyAPI's published image is x86_64 only, and its
 dependency list pins exllamav3 and torch wheels for x86_64, so on arm64 the
 image is built on the node: the TensorRT-LLM image above supplies a CUDA 13
