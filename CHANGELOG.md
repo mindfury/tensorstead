@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-14
+
 ### Added
 - **Speculative decoding drafters for llama.cpp.** `draft_model` (an acquired
   drafter's store directory) and `draft_model_file` (the .gguf within it) are
@@ -197,6 +199,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.5.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.0
 [1.4.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.4.0
 [1.3.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.2.0
