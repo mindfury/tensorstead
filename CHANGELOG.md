@@ -7,6 +7,17 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **Speculative decoding drafters for llama.cpp.** `draft_model` (an acquired
+  drafter's store directory) and `draft_model_file` (the .gguf within it) are
+  mounted by the agent the way vLLM and SGLang drafters are, and reach
+  llama-server as `--model-draft`. The type and length stay in `extra_args`
+  (`spec-type`, `spec-draft-n-max`), as llama.cpp's published recipes put them.
+  A drafter with no drafting type, or a drafting type (`draft-dflash`,
+  `draft-eagle3`, `draft-dspark`, `draft-simple`) with no drafter, is refused
+  before a container starts. A drafter passed in `extra_args` (`model-draft`)
+  is refused, because the agent would not mount it.
+
 ### Documentation
 - **llama.cpp on a DGX Spark.** The suggested image is now
   `ghcr.io/ggml-org/llama.cpp:server-cuda`, which runs on a GB10 as published,
