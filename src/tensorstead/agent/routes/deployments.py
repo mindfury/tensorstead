@@ -10,11 +10,12 @@ The agent:
 1. validates the runtime config against the selected runtime adapter;
 2. translates the deployment into container arguments via the runtime adapter;
 3. creates and starts the container through the container-engine seam;
-4. installs and **enables** a self-sufficient systemd unit for boot restoration
-   that never references the coordinator.
+4. installs a self-sufficient systemd unit that never references the
+   coordinator, and **enables** it for boot restoration only when the node
+   permits it (``TENSORSTEAD_ALLOW_BOOT_RESTORATION``), the revision asks for it
+   (``restore_on_boot``), and the container actually came up.
 
-The unit is enabled only while desired state is ``running``. There is
-no watchdog or supervisor of our own. Management-token gated.
+There is no watchdog or supervisor of our own. Management-token gated.
 """
 
 from __future__ import annotations

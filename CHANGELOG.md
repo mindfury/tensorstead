@@ -7,6 +7,29 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Security
+- **`extra_args` can no longer load code into vLLM or SGLang.** The passthrough
+  now refuses every option the authorization policy classifies as
+  `loads-code` (`--tool-parser-plugin`, `--reasoning-parser-plugin`,
+  `--chat-template`, `--logits-processors`, `--worker-cls`,
+  `--worker-extension-cls`), in any spelling. Code approvals only ever covered
+  modelled fields, and the design assumed the passthrough refused these; it
+  did not, so a deployment could load code that no approval had reviewed.
+  NVIDIA's Nemotron 3.5 Bolt recipe passes `--reasoning-parser-plugin` this
+  way. Its plugin also ignores the server's `default-chat-template-kwargs`
+  (with thinking off by default, every reply landed in `reasoning`), and the
+  built-in `nemotron_v3` parser serves Bolt correctly instead.
+- `reasoning_parser_plugin` is classified as `loads-code`. Authorization
+  policy is now `2026-10-15.1`. Existing approvals are unaffected, because the
+  policy version is not part of an approval's fingerprint.
+
+### Documentation
+- Starting a deployment does not make it come back after a reboot. Since
+  contract 1.13 the agent enables boot restoration only when the node permits
+  it, the deployment asks for it, and the container came up.
+  `docs/first-deployment.md`, `docs/operations.md` and the agent route's
+  docstring still described the old unconditional behaviour.
+
 ## [1.5.0] - 2026-10-14
 
 ### Added

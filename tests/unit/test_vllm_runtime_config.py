@@ -216,6 +216,55 @@ def test_passthrough_of_a_modelled_flag_is_refused_with_the_alternative() -> Non
     assert "validated field" in message
 
 
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "reasoning-parser-plugin",
+        "--reasoning-parser-plugin",
+        "reasoning_parser_plugin",
+        "tool-parser-plugin",
+        "chat-template",
+        "logits-processors",
+        "worker-cls",
+        "worker-extension-cls",
+    ],
+)
+def test_passthrough_cannot_load_code(spelling: str) -> None:
+    """A code-loading flag in ``extra_args`` would skip the approval gate.
+
+    Approvals cover modelled fields only; the passthrough is never reviewed.
+    On 2026-10-15 NVIDIA's Nemotron 3.5 Bolt recipe put
+    ``--reasoning-parser-plugin`` here and it reached vLLM unexamined, while
+    the same deployment's ``trust_remote_code`` needed a reviewed approval.
+    """
+    with pytest.raises(ValueError) as exc:
+        _args({"extra_args": {spelling: "/var/lib/projectx/models/x/plugin.py"}})
+    message = str(exc.value)
+    assert spelling in message
+    assert "loads code" in message
+
+
+def test_code_gate_leaves_neighbouring_flags_alone() -> None:
+    """The refusal is by classification, not by a name that looks similar."""
+    args = _args(
+        {
+            "extra_args": {
+                "default-chat-template-kwargs": '{"enable_thinking":false}',
+                "mamba-backend": "flashinfer",
+            }
+        }
+    )
+    assert "--default-chat-template-kwargs" in args
+    assert "--mamba-backend" in args
+
+
+def test_reasoning_parser_plugin_is_classified_as_loading_code() -> None:
+    from tensorstead.adapters.runtimes.option_policy import LOADS_CODE, classify
+
+    assert classify("reasoning_parser_plugin") == LOADS_CODE
+    assert classify("reasoning-parser-plugin") == LOADS_CODE
+
+
 def test_the_refusal_message_points_at_the_escape_hatch() -> None:
     """An operator refused for an unknown key must learn there is a way through.
 

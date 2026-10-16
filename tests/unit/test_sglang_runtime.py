@@ -104,6 +104,17 @@ def test_it_inherits_the_reserved_flag_rule_without_restating_it() -> None:
             SGLangAdapter().validate_config({"extra_args": hostile})
 
 
+def test_passthrough_cannot_load_code() -> None:
+    """The same approval-gate bypass as vLLM's, closed by the same rule."""
+    for hostile in (
+        {"reasoning-parser-plugin": "/tmp/p.py"},
+        {"tool_parser_plugin": "/tmp/p.py"},
+        {"--chat-template": "/tmp/t.jinja"},
+    ):
+        with pytest.raises(ValueError, match="loads code"):
+            SGLangAdapter().validate_config({"extra_args": hostile})
+
+
 def test_a_modelled_option_cannot_also_be_forwarded() -> None:
     """Otherwise the same flag reaches argv twice with two values."""
     with pytest.raises(ValueError):

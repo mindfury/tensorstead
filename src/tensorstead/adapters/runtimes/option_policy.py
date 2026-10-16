@@ -56,7 +56,14 @@ from typing import Any, Final
 # answer is the same. What changed is that one class can now be opened by a
 # reviewed approval naming an exact tuple, so a decision recorded under
 # 2026-08-15.1 was made when no such opening existed.
-POLICY_VERSION: Final = "2026-09-05.1"
+#
+# 2026-10-15.1 classifies ``reasoning_parser_plugin`` as ``loads-code``. It
+# imports a Python file into the runtime exactly as ``tool_parser_plugin``
+# does, and NVIDIA's Nemotron 3.5 Bolt recipe ships one in the model
+# repository. Unclassified, it reached vLLM through ``extra_args`` with no
+# review at all. The same version is also the first in which the passthrough
+# itself refuses every ``loads-code`` option (see ``authorize_extra_arg``).
+POLICY_VERSION: Final = "2026-10-15.1"
 
 # The effect classes. These are the policy; the map beneath is the reviewed
 # application of it.
@@ -132,6 +139,7 @@ _CLASSIFIED: Final[dict[str, str]] = {
     "trust_remote_code": LOADS_CODE,
     "chat_template": LOADS_CODE,
     "tool_parser_plugin": LOADS_CODE,
+    "reasoning_parser_plugin": LOADS_CODE,
     "logits_processors": LOADS_CODE,
     "worker_cls": LOADS_CODE,
     "worker_extension_cls": LOADS_CODE,

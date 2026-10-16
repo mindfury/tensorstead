@@ -101,11 +101,14 @@ stead deployment remove  llama-70b
 running deployment exits `0` with `already_in_state` and creates no second
 instance. Scripts can be re-run without guarding every call.
 
-**Stop means stop.** It removes the boot-restoration unit as well as the
-container, so a reboot does not quietly bring it back. Conversely a deployment
-whose desired state is `running` **survives a coordinator outage and a reboot**
-— the unit the agent installed is self-sufficient and holds no reference to the
-coordinator. You can stop the coordinator entirely and inference keeps serving.
+**Stop means stop.** It removes the deployment's systemd unit as well as the
+container, so a reboot does not quietly bring it back. A running deployment
+**survives a coordinator outage**: the container and its unit hold no
+reference to the coordinator, so you can stop the coordinator entirely and
+inference keeps serving. It does **not** survive a reboot unless boot
+restoration was both permitted on the node (`TENSORSTEAD_ALLOW_BOOT_RESTORATION`)
+and requested on the deployment (`--restore-on-boot`). Both default to off; see
+[Cold start, in order](#cold-start-in-order).
 
 ### Across several nodes
 

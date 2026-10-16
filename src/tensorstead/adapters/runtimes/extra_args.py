@@ -35,6 +35,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, get_args
 
+from tensorstead.adapters.runtimes.option_policy import LOADS_CODE, classify
+
 
 def normalize_flag(key: str) -> str:
     """Reduce an ``extra_args`` key to its canonical flag name.
@@ -61,8 +63,13 @@ def authorize_extra_arg(
     *,
     forbidden: Mapping[str, str],
     model_fields: Mapping[str, Any],
+    refuse_code_loading: bool = False,
 ) -> None:
     """Raise ``ValueError`` when ``key`` reaches something config does not own.
+
+    ``refuse_code_loading`` also refuses any flag the authorization policy
+    classifies as ``loads-code``. Set it for runtimes whose flags that policy
+    describes (vLLM and SGLang).
 
     ``forbidden`` maps a canonical flag name to the reason the product owns it.
     ``model_fields`` is the config model's own fields — a modelled option must
@@ -102,6 +109,23 @@ def authorize_extra_arg(
         raise ValueError(
             f"extra_args may not set {key!r}: it is a validated field, "
             f"set {modelled!r} directly so it is checked rather than forwarded"
+        )
+
+    # The passthrough is the one place a code-loading option could arrive with
+    # no approval check at all. ``requested_code_options`` deliberately does not
+    # search ``extra_args`` -- an approval covers modelled fields only -- and
+    # that design assumed this refusal existed. It did not: until 2026-10-15
+    # ``--tool-parser-plugin``, ``--chat-template`` and ``--logits-processors``
+    # all went straight to vLLM, and so did NVIDIA's Bolt recipe's
+    # ``--reasoning-parser-plugin``. Opt-in, because the policy's names are
+    # vLLM's and SGLang's; another runtime's flag of the same spelling may mean
+    # something else.
+    if refuse_code_loading and classify(modelled) == LOADS_CODE:
+        raise ValueError(
+            f"extra_args may not set {key!r}: it loads code into the runtime, and the "
+            f"passthrough is never reviewed, so no approval can reach it. Use a "
+            f"modelled field with a code approval naming the exact model revision "
+            f"and image digest, or omit the option"
         )
 
     # A negative alias is the same option approached from the other side. Only
