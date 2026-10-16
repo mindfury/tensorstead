@@ -476,6 +476,7 @@ class VLLMConfig(BaseModel):
                 key,
                 forbidden=_FORBIDDEN_EXTRA_ARGS,
                 model_fields=cls.model_fields,
+                refuse_code_loading=True,
             )
         return value
 

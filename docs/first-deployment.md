@@ -112,9 +112,14 @@ to the runtime's own validator (vLLM here).
 
 ## Step 4 — Start the deployment
 
-Start it. The coordinator drives the agent to pull the image, start the
-container, and install+enable a self-sufficient boot-restoration unit so a
-reboot restores the running deployment.
+Start it. The coordinator drives the agent to pull the image and start the
+container. The agent also writes a self-sufficient systemd unit for the
+deployment, but it does **not** enable it at boot unless three things are true:
+the node was provisioned to allow it (`TENSORSTEAD_ALLOW_BOOT_RESTORATION`,
+default false), the deployment asked for it (`--restore-on-boot`, default off),
+and the container actually came up. By default, then, a reboot brings the
+deployment back to `not_running` and someone starts it on purpose. See
+[Rebooting a node](./operations.md#rebooting-a-node) for why.
 
 ```bash
 stead deployment start llama-70b
