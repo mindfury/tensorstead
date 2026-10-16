@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-15
+
 ### Security
 - **`extra_args` can no longer load code into vLLM or SGLang.** The passthrough
   now refuses every option the authorization policy classifies as
@@ -222,6 +224,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.5.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.1
 [1.5.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.0
 [1.4.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.4.0
 [1.3.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.3.0
