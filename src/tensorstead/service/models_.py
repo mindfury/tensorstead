@@ -27,9 +27,11 @@ from typing import Any
 
 from tensorstead.contracts.version import CompatibilityRefusal
 from tensorstead.domain.errors import (
+    AcquisitionInProgressError,
     AuthorizationRefusedError,
     NodeOperationFailedError,
     NotFoundError,
+    ReplicationFailedError,
     StillReferencedError,
 )
 from tensorstead.domain.identity import new_ulid
@@ -85,6 +87,70 @@ class ModelService:
         # per-deployment lock in lifecycle.py.
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        # Acquisitions running now, by repository (source, model, file
+        # selection) -- deliberately *not* by revision, so ``main`` and the
+        # commit it points at cannot download side by side. Process-local is
+        # sufficient: one coordinator process admits every acquire.
+        self._in_flight: dict[str, tuple[str, tuple[str, ...]]] = {}
+        self._in_flight_guard = threading.Lock()
+
+    # ------------------------------------------------------------ in flight
+    @staticmethod
+    def _flight_key(source_id: str, source_model_id: str, file_selector: tuple[str, ...]) -> str:
+        return local_model_id(source_id, source_model_id, canonical_file_selector(file_selector))
+
+    def reserve_acquisition(
+        self,
+        *,
+        source_id: str,
+        source_model_id: str,
+        file_selector: tuple[str, ...],
+        operation_id: str,
+        nodes: list[str],
+    ) -> None:
+        """Admit one acquisition per repository at a time, or refuse naming the one running.
+
+        Called by the route before it returns 202, so a refused request never
+        becomes a running operation. The running one is named, with its nodes:
+        once it finishes, re-running the refused request replicates from the
+        node that now holds the model instead of downloading it again.
+        """
+        key = self._flight_key(source_id, source_model_id, file_selector)
+        with self._in_flight_guard:
+            running = self._in_flight.get(key)
+            if running is not None:
+                operation, holders = running
+                names = [self._node_name(n) for n in holders]
+                raise AcquisitionInProgressError(
+                    f"download already in progress: {source_model_id!r} is being acquired "
+                    f"by operation {operation} onto {', '.join(names)}. Re-run this acquire "
+                    f"when that operation completes; it will replicate from "
+                    f"{names[0]} instead of downloading from the Internet again",
+                    detail={
+                        "operation_id": operation,
+                        "nodes": list(holders),
+                        "source_model_id": source_model_id,
+                    },
+                )
+            self._in_flight[key] = (operation_id, tuple(nodes))
+
+    def release_acquisition(
+        self,
+        *,
+        source_id: str,
+        source_model_id: str,
+        file_selector: tuple[str, ...],
+        operation_id: str,
+    ) -> None:
+        """End an admitted acquisition. Only its own operation can release it."""
+        key = self._flight_key(source_id, source_model_id, file_selector)
+        with self._in_flight_guard:
+            if self._in_flight.get(key, ("",))[0] == operation_id:
+                del self._in_flight[key]
+
+    def _node_name(self, node_id: str) -> str:
+        node = self._repo.get_node(node_id)
+        return node.name if node is not None else node_id
 
     def _lock_for(
         self,
@@ -117,6 +183,7 @@ class ModelService:
         nodes: list[str],
         credential: str | None = None,
         file_selector: tuple[str, ...] = (),
+        allow_upstream_fallback: bool = False,
     ) -> Model:
         """Acquire ``source_model_id`` onto ``nodes``.
 
@@ -139,6 +206,7 @@ class ModelService:
                 nodes=nodes,
                 credential=credential,
                 file_selector=selector,
+                allow_upstream_fallback=allow_upstream_fallback,
             )
 
     def _acquire_under_lock(
@@ -151,6 +219,7 @@ class ModelService:
         nodes: list[str],
         credential: str | None,
         file_selector: tuple[str, ...] = (),
+        allow_upstream_fallback: bool = False,
     ) -> Model:
         """The acquire body, run under the per-key lock.
 
@@ -193,10 +262,8 @@ class ModelService:
                 resolved = requested_revision
                 continue
 
-            if (
-                holder is not None
-                and resolved is not None
-                and self._try_replicate(
+            if holder is not None and resolved is not None:
+                replicated, reason = self._try_replicate(
                     source_id,
                     source_model_id,
                     resolved,
@@ -204,13 +271,31 @@ class ModelService:
                     dest_node_id=node_id,
                     file_selector=file_selector,
                 )
-            ):
-                replicas.append(
-                    self._record_available(
-                        source_id, source_model_id, resolved, node_id, file_selector
+                if replicated:
+                    replicas.append(
+                        self._record_available(
+                            source_id, source_model_id, resolved, node_id, file_selector
+                        )
                     )
-                )
-                continue
+                    continue
+                if not allow_upstream_fallback:
+                    # The replicas already acquired stay. What is refused is
+                    # quietly fetching the same bytes from the Internet again,
+                    # which is what this branch used to do on every failure --
+                    # including the one that always happened (no digest).
+                    holder_name, dest_name = self._node_name(holder), self._node_name(node_id)
+                    raise ReplicationFailedError(
+                        f"{holder_name} holds {source_model_id!r} at {resolved}, but copying "
+                        f"it to {dest_name} failed: {reason}. It was not downloaded from "
+                        f"upstream a second time. Fix the cause and re-run the acquire to "
+                        f"replicate, or pass allow_upstream_fallback to download it again",
+                        node_id=node_id,
+                        detail={
+                            "holder_node_id": holder,
+                            "destination_node_id": node_id,
+                            "reason": reason,
+                        },
+                    )
 
             result = self._acquire_on_node(
                 source, source_model_id, requested_revision, node_id, secret, file_selector
@@ -247,25 +332,28 @@ class ModelService:
         source_node_id: str,
         dest_node_id: str,
         file_selector: tuple[str, ...] = (),
-    ) -> bool:
-        """Ask ``dest`` to pull the model from ``source``; report whether it did.
+    ) -> tuple[bool, str]:
+        """Ask ``dest`` to pull the model from ``source``; report whether it did, and why not.
 
-        Returns ``False`` rather than raising when replication is not possible —
-        an unreachable peer, no usable route, an agent too old to support the
-        operation. **Local replication is an optimization, not a precondition**,
-        so the caller falls back to acquiring
-        from upstream instead of failing the whole request.
+        Returns ``(False, reason)`` rather than raising when replication is not
+        possible — an unreachable peer, no usable route, an agent too old to
+        support the operation, no digest to verify against. The caller refuses
+        with that reason rather than downloading from upstream again, unless the
+        request explicitly allowed it: this used to fall back silently, and
+        because no real download ever recorded a digest, it always did.
         """
         source_node = self._repo.get_node(source_node_id)
         dest_node = self._repo.get_node(dest_node_id)
         if source_node is None or dest_node is None:
-            return False
+            return False, "a node is not registered"
 
         model = self._repo.find_model(source_id, source_model_id, revision, file_selector)
         if model is None or model.content_digest is None:
             # Nothing to verify the transfer against; the destination would
-            # refuse to promote it anyway. Go upstream instead.
-            return False
+            # refuse to promote it anyway. Agents compute one on download since
+            # this was found never to be set for real Hugging Face downloads,
+            # so a model without one predates that.
+            return False, "no content digest is recorded to verify a copy against"
 
         try:
             self._client.replicate_model(
@@ -278,9 +366,9 @@ class ModelService:
                 },
                 source_node=source_node,
             )
-        except (AgentCallError, CompatibilityRefusal, AttributeError, NotImplementedError):
-            return False
-        return True
+        except (AgentCallError, CompatibilityRefusal, AttributeError, NotImplementedError) as exc:
+            return False, str(exc) or type(exc).__name__
+        return True, ""
 
     def _record_content_digest(
         self,

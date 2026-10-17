@@ -19,6 +19,8 @@ between the two agents.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -51,7 +53,7 @@ def _register(client: TestClient, name: str, endpoint: str) -> str:
     return str(resp.json()["id"])
 
 
-def _acquire(client: TestClient, nodes: list[str]) -> int:
+def _acquire(client: TestClient, nodes: list[str], **extra: object) -> int:
     resp = client.post(
         "/v1/models:acquire",
         json={
@@ -59,6 +61,7 @@ def _acquire(client: TestClient, nodes: list[str]) -> int:
             "source_model_id": "org/model",
             "revision": "e1f2a3b",
             "nodes": nodes,
+            **extra,
         },
         headers=_AUTH,
     )
@@ -109,22 +112,53 @@ def test_both_nodes_end_up_with_an_available_replica(
     assert states == {node_a: "available", node_b: "available"}
 
 
-def test_replication_failure_falls_back_to_upstream(
+def test_replication_failure_is_refused_not_refetched(
     two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
 ) -> None:
-    """No usable peer hop → acquire from upstream instead.
+    """No usable peer hop → the request fails naming the holder; upstream is not hit twice.
 
-    Local replication is an optimization, not a precondition, so its failure
-    must not fail the operator's request.
+    This used to fall back to upstream silently, and with the real Hugging Face
+    adapter replication never worked at all, so every second node quietly
+    downloaded the whole model again (165 GiB for GLM-5.3, 2026-10-16).
     """
     client, node_a, node_b, agent_a, agent_b = two_nodes
     agent_b.replication_unavailable = True
 
-    assert _acquire(client, [node_a, node_b]) == 202
+    resp = client.post(
+        "/v1/models:acquire",
+        json={
+            "source_id": "huggingface",
+            "source_model_id": "org/model",
+            "revision": "e1f2a3b",
+            "nodes": [node_a, node_b],
+        },
+        headers=_AUTH,
+    )
+    operation = poll_operation(client, resp.json()["operation_id"])
 
     assert agent_a.acquisition_calls == 1
-    assert agent_b.acquisition_calls == 1, "the second node fell back to upstream"
+    assert agent_b.acquisition_calls == 0, "the second node must not download it again"
+    assert operation["state"] == "failed"
+    assert "replication_failed" in json.dumps(operation)
 
+    models = client.get("/v1/models", headers=_AUTH).json()
+    model = next(m for m in models if m["source_model_id"] == "org/model")
+    states = {r["node_id"]: r["state"] for r in model["replicas"]}
+    assert states.get(node_a) == "available", "the replica already acquired is kept"
+    assert states.get(node_b) != "available"
+
+
+def test_upstream_fallback_happens_only_when_asked(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    """``allow_upstream_fallback`` restores the old behaviour, explicitly."""
+    client, node_a, node_b, agent_a, agent_b = two_nodes
+    agent_b.replication_unavailable = True
+
+    assert _acquire(client, [node_a, node_b], allow_upstream_fallback=True) == 202
+
+    assert agent_a.acquisition_calls == 1
+    assert agent_b.acquisition_calls == 1
     models = client.get("/v1/models", headers=_AUTH).json()
     model = next(m for m in models if m["source_model_id"] == "org/model")
     states = {r["node_id"]: r["state"] for r in model["replicas"]}
@@ -187,3 +221,46 @@ def test_no_model_byte_transits_the_coordinator(
         source_agent_endpoint="https://10.0.0.11:8443",
     )
     assert set(outcome) == {"model_id", "state", "content_digest", "size_bytes"}
+
+
+def test_a_second_acquire_while_one_is_running_is_refused(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    """One download per repository: the second request is told, at once, to wait and replicate."""
+    client, node_a, node_b, _agent_a, agent_b = two_nodes
+    service = client.app.state.models_service  # type: ignore[attr-defined]
+    service.reserve_acquisition(
+        source_id="huggingface",
+        source_model_id="org/model",
+        file_selector=(),
+        operation_id="01RUNNINGOPERATION000000000",
+        nodes=[node_a],
+    )
+
+    resp = client.post(
+        "/v1/models:acquire",
+        json={
+            "source_id": "huggingface",
+            "source_model_id": "org/model",
+            "revision": "main",  # a different revision spelling is the same download
+            "nodes": [node_b],
+        },
+        headers=_AUTH,
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["code"] == "acquisition_in_progress"
+    assert "01RUNNINGOPERATION000000000" in body["message"]
+    assert "spark-01" in body["message"]
+    assert agent_b.acquisition_calls == 0
+
+
+def test_the_reservation_is_released_when_the_acquire_ends(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    client, node_a, node_b, agent_a, _agent_b = two_nodes
+    assert _acquire(client, [node_a]) == 202
+    # A follow-up for the other node is admitted, and replicates rather than downloading.
+    assert _acquire(client, [node_a, node_b]) == 202
+    assert agent_a.acquisition_calls == 1

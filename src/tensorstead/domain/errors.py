@@ -212,3 +212,26 @@ class ConcurrentModificationError(DomainError):
     """A concurrent conflict lost an optimistic revision check."""
 
     code = "concurrent_modification"
+
+
+class AcquisitionInProgressError(DomainError):
+    """The same repository is already being downloaded; a second fetch is refused.
+
+    Refused rather than queued. A queued request would hold its caller open for
+    the whole download -- an hour for a large checkpoint -- and two requests
+    racing to the Internet for the same bytes is the waste this exists to stop.
+    Re-running the acquire once the first completes replicates from the node
+    that holds it instead of downloading again.
+    """
+
+    code = "acquisition_in_progress"
+
+
+class ReplicationFailedError(DomainError):
+    """A peer holds the model, copying it from that peer failed, and upstream was not retried.
+
+    Raised instead of silently downloading the same bytes from the Internet a
+    second time. The replicas already acquired are kept.
+    """
+
+    code = "replication_failed"

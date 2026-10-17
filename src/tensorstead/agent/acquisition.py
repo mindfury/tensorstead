@@ -261,10 +261,22 @@ class ModelAcquisitionService:
                 self._mark_failed(model_id, _redact(str(exc), credential), existing=existing)
                 raise
 
-        # The upstream source is authoritative for what it downloaded, so the
+        # The upstream source is authoritative for what it downloaded, so a
         # digest it reports is recorded rather than recomputed here. Peer
         # replication is the case that must verify (it is copying someone
         # else's claim), and it does — see agent/replication.py.
+        #
+        # When the source reports none, compute it. The real Hugging Face
+        # adapter never reported one (only the test fake did), so the
+        # coordinator had nothing to verify a peer copy against, skipped
+        # replication, and every further node downloaded the whole model from
+        # the Internet again -- 165 GiB twice for GLM-5.3 on 2026-10-16. This is
+        # the same digest the destination recomputes over the received tree.
+        if content_digest is None:
+            from tensorstead.agent.replication import directory_digest
+
+            _report(0.95, "digesting")
+            content_digest = directory_digest(staging_dir)
         replica = self.promote(
             model_id,
             staging_dir,

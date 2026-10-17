@@ -144,6 +144,10 @@ class ModelAcquireRequest(ClientContractModel):
     # option: one GGUF repository commonly ships twenty-odd quantizations, and
     # the selection is what says which of them this model is (migration 0006).
     file_selector: list[str] = Field(default_factory=list)
+    # When a node already holds the model and copying it from that node fails,
+    # download it from upstream anyway. Off by default: the failure is reported
+    # instead of being papered over with a second Internet download.
+    allow_upstream_fallback: bool = False
 
 
 class OperationAcceptedResponse(ClientContractModel):
