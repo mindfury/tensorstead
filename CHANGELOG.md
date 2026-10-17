@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-17
+
 ### Added
 - **`allow_io_uring` for vLLM deployments: an approval-gated seccomp exception.**
   NVIDIA's dual-DGX-Spark recipe for `nvidia/GLM-5.3-Flash-FP4-Local` loads its
@@ -24,44 +26,10 @@ is versioned separately (`stead status` reports both).
   (`code_approval_create`) names the exact runtime, model revision and image
   digest, and both the coordinator and the agent check it. It can't arrive
   through `extra_args`. Authorization policy is now `2026-10-16.1`.
-
-### Fixed
-- **A model is downloaded from the Internet once, not once per node.**
-  Multi-node acquires were meant to fetch on the first node and replicate to
-  the rest, but replication needs a content digest, and the real Hugging Face
-  adapter never reported one (only the test fake did). So every additional node
-  silently downloaded the whole model again: 165 GiB twice for GLM-5.3. The
-  agent now computes the digest itself after verifying a download.
-
-- **A multi-node start pulls its image from the registry once.** Each rank's
-  agent used to resolve the image alone, so every node without it pulled the
-  same bytes (9.7 GB per node for the GLM-5.3 runtime). The coordinator now
-  stages the image first. A node that already holds it is the source;
-  otherwise the first node pulls it, and the rest copy it agent-to-agent,
-  verified by id. A failed copy fails the start (`image_staging_failed`)
-  naming the node, rather than letting it pull. Unreachable nodes are left to
-  the start, which reports them as before.
-- **A peer-copied image starts, is removable, and can be re-shared.** The
-  first version of the change below found a copied, digest-pinned image by its
-  id and then still created the container from the `name@sha256:` reference,
-  which the daemon cannot resolve. That would have failed every copied rank of
-  a fresh multi-node start with "no such image". Removing such an image
-  reported "not held" while its bytes stayed, so the coordinator reaped the
-  record and orphaned them (seen on the Sparks). Container create, image
-  remove, the peer content endpoint and the schema probe now all hand the
-  daemon what the image is actually held as (`agent/local_images.py`).
-- **Digest-pinned images resolve after a peer copy.** `docker save`/`load`
-  drops the `name@sha256:` reference, so a copied image is held only by its id
-  and a pinned reference missed it and pulled again (measured on the Sparks).
-  When the name does not resolve, the agent now accepts a local image whose
-  id is exactly the pinned digest. That match is exact on Docker's containerd
-  store (where the id is the manifest digest) and never occurs on the classic
-  store.
-
-### Added
-- `stead image pull REF --node A --node B` / `POST /v1/images:pull` / MCP
-  `image_pull`: stage an image before a planned start, with the same
-  pull-once-and-copy behaviour. Recorded as an `image_acquire` operation.
+- **`stead image pull REF --node A --node B`** (`POST /v1/images:pull`, MCP
+  `image_pull`) stages a registry image on nodes before a planned start, so
+  the download isn't part of the downtime. It pulls once and copies to the
+  rest (see Fixed). Recorded as an `image_acquire` operation.
 
 ### Changed
 - **Failed replication is refused, not papered over.** When a node already
@@ -77,6 +45,43 @@ is versioned separately (`stead status` reports both).
   commit it names can't download side by side.
 - Approval refusals name the option's own reason instead of always saying it
   "loads code".
+
+### Fixed
+- **A model is downloaded from the Internet once, not once per node.**
+  Multi-node acquires were meant to fetch on the first node and replicate to
+  the rest, but replication needs a content digest, and the real Hugging Face
+  adapter never reported one (only the test fake did). So every additional node
+  silently downloaded the whole model again: 165 GiB twice for GLM-5.3. The
+  agent now computes the digest itself after verifying a download.
+- **A multi-node start pulls its image from the registry once.** Each rank's
+  agent used to resolve the image alone, so every node without it pulled the
+  same bytes (9.7 GB per node for the GLM-5.3 runtime). The coordinator now
+  stages the image first. A node that already holds it is the source;
+  otherwise the first node pulls it, and the rest copy it agent-to-agent,
+  verified by id. A failed copy fails the start (`image_staging_failed`)
+  naming the node, rather than letting it pull. Unreachable nodes are left to
+  the start, which reports them as before.
+- **A peer-copied, digest-pinned image is usable.** `docker save`/`load` drops
+  the `name@sha256:` reference, so a copied image is held only by its id
+  (measured on the Sparks). The agent now resolves such a reference to a local
+  image whose id is exactly the pinned digest. That match is exact on Docker's
+  containerd store, where the id is the manifest digest, and never occurs on
+  the classic store. Container create, image remove, the peer content
+  endpoint and the schema probe all hand the daemon what the image is held as
+  (`agent/local_images.py`), so a copied image starts, is removed rather than
+  orphaned, and can be the source for a further copy.
+
+### Security
+- GitHub Actions in `ci.yml` and `release.yml` are pinned by commit SHA.
+  `release.yml` publishes the package, so a moved tag would have run
+  unreviewed code there.
+- `.github/dependabot.yml`: weekly grouped version updates for Actions and
+  `uv`, and grouped security updates. `SECURITY.md` points reporters at
+  private vulnerability reporting.
+- Dependency updates, among them httpx2 2.12, httpcore2 2.10, mcp 2.3,
+  pydantic 2.14, fastapi 0.143, urllib3 2.8 and pyjwt 2.15. Tensorstead does
+  not use OpenTelemetry, so fastapi's change making its exporter setup opt-in
+  has no effect here.
 
 ## [1.5.1] - 2026-10-15
 
@@ -295,6 +300,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.6.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.6.0
 [1.5.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.1
 [1.5.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.0
 [1.4.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.4.0
