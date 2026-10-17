@@ -33,7 +33,7 @@ class _Engine:
 
 def test_held_by_bare_digest_resolves_without_a_pull() -> None:
     engine = _Engine({_DIGEST: _DIGEST})  # containerd store: id == manifest digest
-    assert _resolve_image(engine, _PINNED) == _DIGEST
+    assert _resolve_image(engine, _PINNED) == (_DIGEST, _DIGEST)  # handed to the daemon by id
     assert engine.pulls == []
 
 
@@ -46,8 +46,14 @@ def test_a_different_image_under_that_id_is_not_taken() -> None:
 
 def test_a_tag_reference_is_unaffected() -> None:
     engine = _Engine({})
-    _resolve_image(engine, "repo/vllm:latest")
+    assert _resolve_image(engine, "repo/vllm:latest") == ("repo/vllm:latest", _DIGEST)
     assert engine.pulls == ["repo/vllm:latest"]
+
+
+def test_an_image_held_by_name_is_handed_over_by_name() -> None:
+    engine = _Engine({_PINNED: _DIGEST})
+    assert _resolve_image(engine, _PINNED) == (_PINNED, _DIGEST)
+    assert engine.pulls == []
 
 
 @pytest.mark.parametrize(

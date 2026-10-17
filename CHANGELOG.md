@@ -41,6 +41,15 @@ is versioned separately (`stead status` reports both).
   verified by id. A failed copy fails the start (`image_staging_failed`)
   naming the node, rather than letting it pull. Unreachable nodes are left to
   the start, which reports them as before.
+- **A peer-copied image starts, is removable, and can be re-shared.** The
+  first version of the change below found a copied, digest-pinned image by its
+  id and then still created the container from the `name@sha256:` reference,
+  which the daemon cannot resolve. That would have failed every copied rank of
+  a fresh multi-node start with "no such image". Removing such an image
+  reported "not held" while its bytes stayed, so the coordinator reaped the
+  record and orphaned them (seen on the Sparks). Container create, image
+  remove, the peer content endpoint and the schema probe now all hand the
+  daemon what the image is actually held as (`agent/local_images.py`).
 - **Digest-pinned images resolve after a peer copy.** `docker save`/`load`
   drops the `name@sha256:` reference, so a copied image is held only by its id
   and a pinned reference missed it and pulled again (measured on the Sparks).

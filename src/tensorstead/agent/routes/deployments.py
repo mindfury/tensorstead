@@ -32,9 +32,9 @@ from pydantic import BaseModel, ConfigDict
 from tensorstead.adapters.runtimes.option_policy import is_approvable
 from tensorstead.agent import cache_store, host_network
 from tensorstead.agent.app import require_management
+from tensorstead.agent.local_images import resolve_local
 from tensorstead.domain.approvals import fingerprint, normalize_option
 from tensorstead.domain.identity import is_valid_ulid
-from tensorstead.domain.models import pinned_digest
 
 router = APIRouter(prefix="/agent/v1", tags=["deployments"])
 
@@ -306,7 +306,9 @@ def create_deployment(
     # no registry repository, so the pull failed and the feature stopped one step
     # short of being usable. Present-locally wins; only an absent image is
     # fetched.
-    digest = _resolve_image(engine, payload.image_reference)
+    # ``image`` is what the daemon is handed from here on: the reference, or --
+    # for a peer-copied, digest-pinned image -- the id it is actually held by.
+    image, digest = _resolve_image(engine, payload.image_reference)
 
     # The image half of the grant, now that the digest is a fact rather than a
     # reference. Before launch args, before the container: a grant for a
@@ -406,7 +408,7 @@ def create_deployment(
         # start a deployment because a performance directory was unavailable
         # would turn an optimisation into an outage.
         cache_path = cache_store.provision(
-            payload.deployment_id, owner_uid=_image_uid(engine, payload.image_reference)
+            payload.deployment_id, owner_uid=_image_uid(engine, image)
         )
 
     # A runtime may name further models it reads -- a drafter, in vLLM's case.
@@ -422,7 +424,7 @@ def create_deployment(
     container_name = f"tensorstead-{payload.deployment_id}"
     engine.create_container(
         name=container_name,
-        image=payload.image_reference,
+        image=image,
         endpoint=payload.endpoint,
         model_path=model_path,
         command_args=launch_args,
@@ -747,8 +749,8 @@ def _container_requirements(adapter: Any, config: dict[str, Any], position: Any 
     return declare(config, position)
 
 
-def _resolve_image(engine: Any, reference: str) -> str:
-    """Return ``reference``'s digest, preferring the image already on the node.
+def _resolve_image(engine: Any, reference: str) -> tuple[str, str]:
+    """Return ``(what to hand the daemon, image id)``, preferring an image already here.
 
     Local-first, not pull-first, and the difference is deliberate. A pull is a
     network operation against a registry; an image this product built or
@@ -762,24 +764,15 @@ def _resolve_image(engine: Any, reference: str) -> str:
     mutable tag no longer picks up a newer image merely by being restarted.
     Refreshing it becomes an explicit act. The design notes carry the
     alternatives and the reasoning.
+
+    A peer-copied, digest-pinned image is found by its id and returned *as*
+    that id (``agent/local_images.py``), because the name it was pinned by does
+    not resolve on this daemon and a container created from it would fail.
     """
-    present = getattr(engine, "image_digest", None)
-    if present is not None:
-        local = present(reference)
-        if local:
-            return str(local)
-        # A digest-pinned reference whose name did not resolve may still be
-        # here under its content address. An image copied from a peer arrives
-        # without its ``name@digest`` reference -- docker save/load does not
-        # carry one -- so it is held only by id (measured on the Sparks,
-        # 2026-10-16). On the containerd image store that id *is* the manifest
-        # digest the reference pins, so the match is exact; on the classic
-        # store the id is the config digest, never equal, and this falls
-        # through to the pull as before.
-        pinned = pinned_digest(reference)
-        if pinned is not None and present(pinned) == pinned:
-            return pinned
-    return str(engine.pull_image(reference))
+    local = resolve_local(engine, reference)
+    if local is not None:
+        return local
+    return reference, str(engine.pull_image(reference))
 
 
 def _runtime_adapter(request: Request, runtime_type: str) -> Any:

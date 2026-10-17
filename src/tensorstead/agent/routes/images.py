@@ -22,6 +22,7 @@ from tensorstead.agent.container_engine.base import (
     ImageInUseError,
     ImageNotPresentError,
 )
+from tensorstead.agent.local_images import resolve_local
 
 router = APIRouter(prefix="/agent/v1", tags=["images"])
 
@@ -85,12 +86,17 @@ def remove_image(payload: ImageRemoveRequest, request: Request) -> ImageRemoveRe
     that outlived its object, which is a thing it should be able to finish.
     """
     engine = request.app.state.container_engine
-    digest = engine.image_digest(payload.reference)
-    if digest is None:
+    # By what the daemon actually holds it as: a peer-copied, digest-pinned
+    # image is held only by id, and asking for its name reported "not held"
+    # while the bytes stayed -- the coordinator then reaped the record and
+    # orphaned them (observed on the Sparks, 2026-10-16).
+    local = resolve_local(engine, payload.reference)
+    if local is None:
         return ImageRemoveResponse(reference=payload.reference, removed=False, digest=None)
+    target, digest = local
 
     try:
-        engine.remove_image(image_id=payload.reference)
+        engine.remove_image(image_id=target)
     except ImageNotPresentError:
         # Raced with something else removing it. Same outcome as absent.
         return ImageRemoveResponse(reference=payload.reference, removed=False, digest=None)
@@ -358,7 +364,8 @@ def probe_image(payload: ImageProbeRequest, request: Request) -> ImageProbeRespo
     engine = request.app.state.container_engine
     adapter = _runtime_adapter(request, payload.runtime_type)
     probe = adapter.schema_probe()
-    image_id = engine.image_digest(payload.reference)
+    local = resolve_local(engine, payload.reference)
+    image_id = local[1] if local is not None else None
 
     if probe is None:
         return ImageProbeResponse(
@@ -433,8 +440,11 @@ def serve_image_content(reference: str, request: Request) -> StreamingResponse:
     store = Path(getattr(request.app.state, "image_store_path", "/var/lib/tensorstead/images"))
     store.mkdir(parents=True, exist_ok=True)
     archive = store / f".serve-{reference.replace('/', '_').replace(':', '_')}.tar"
+    # A holder that itself received the image by copy holds it only by id.
+    local = resolve_local(engine, reference)
+    target = local[0] if local is not None else reference
     try:
-        engine.export_image(reference=reference, archive_path=str(archive))
+        engine.export_image(reference=target, archive_path=str(archive))
     except Exception as exc:
         archive.unlink(missing_ok=True)
         raise HTTPException(
