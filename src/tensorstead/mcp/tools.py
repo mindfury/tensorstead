@@ -170,8 +170,23 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
                 )
             ),
         ] = None,
+        allow_upstream_fallback: Annotated[
+            bool,
+            Field(
+                description=(
+                    "If copying from a node that already holds the model fails, download it "
+                    "from upstream again. Leave false: a failed copy is reported instead."
+                )
+            ),
+        ] = False,
     ) -> ApiResult:
         """Acquire a model onto nodes; returns an ``operation_id``.
+
+        Downloaded from upstream **once**, onto the first node; the others copy
+        it from that node, verified by content digest. A second acquire of the
+        same repository while one is running is refused with
+        ``acquisition_in_progress``, naming the running operation: wait for it
+        to finish and re-run, which then replicates instead of downloading.
 
         ``credential`` names a stored credential — it is a *name*, never a
         secret value. Omitting it applies the source's default.
@@ -192,6 +207,8 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
             payload["credential"] = credential
         if file_selector:
             payload["file_selector"] = file_selector
+        if allow_upstream_fallback:
+            payload["allow_upstream_fallback"] = True
         return client.request("POST", "/v1/models:acquire", json=payload)
 
     @server.tool(name="model_list")

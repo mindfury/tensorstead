@@ -55,6 +55,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "authorization_refused": 403,
     "invalid_deployment": 422,
     "concurrent_modification": 409,
+    "acquisition_in_progress": 409,
+    "replication_failed": 409,
 }
 
 

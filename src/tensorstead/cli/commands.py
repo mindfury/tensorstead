@@ -696,11 +696,26 @@ def model_acquire(
             ),
         ),
     ] = None,
+    allow_upstream_fallback: Annotated[
+        bool,
+        typer.Option(
+            "--allow-upstream-fallback",
+            help=(
+                "If copying the model from a node that already holds it fails, download it "
+                "from upstream again. Off by default: a failed copy is reported instead."
+            ),
+        ),
+    ] = False,
     json_mode: Annotated[
         bool, typer.Option("--json", help="Emit JSON for machine consumption.")
     ] = False,
 ) -> None:
-    """Acquire a model onto one or more nodes."""
+    """Acquire a model onto one or more nodes.
+
+    Downloaded from upstream once, onto the first node; every other node copies
+    it from that node. A second acquire of the same repository while one runs is
+    refused (``acquisition_in_progress``): re-run it when the first completes.
+    """
     # Operators select nodes by their stable inventory names.  The coordinator
     # persists ULID identities, so resolve names at the CLI boundary instead
     # of making a user discover and paste internal IDs.
@@ -715,6 +730,8 @@ def model_acquire(
         payload["credential"] = credential
     if file:
         payload["file_selector"] = list(file)
+    if allow_upstream_fallback:
+        payload["allow_upstream_fallback"] = True
     _run_acquire(payload, json_mode)
 
 

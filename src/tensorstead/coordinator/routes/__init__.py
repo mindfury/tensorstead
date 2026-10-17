@@ -45,6 +45,7 @@ from tensorstead.contracts.api import (
 )
 from tensorstead.contracts.version import CONTRACT_VERSION
 from tensorstead.coordinator.auth import _bearer
+from tensorstead.domain.errors import AcquisitionInProgressError
 from tensorstead.domain.identity import new_ulid
 from tensorstead.domain.models import Node, OperationKind
 from tensorstead.version import VERSION
@@ -564,6 +565,21 @@ async def acquire_model(
         target_type="model",
         target_id=new_ulid(),  # the Model row is created during acquire
     )
+    models_service = _models_service(request)
+    # One download per repository at a time. Refused here, before the 202, so a
+    # caller is told at once rather than polling an operation that waits an
+    # hour behind another -- and the refusal itself is on the record.
+    try:
+        models_service.reserve_acquisition(
+            source_id=payload.source_id,
+            source_model_id=payload.source_model_id,
+            file_selector=tuple(payload.file_selector),
+            operation_id=operation.id,
+            nodes=payload.nodes,
+        )
+    except AcquisitionInProgressError as exc:
+        operations.fail(operation.id, code=exc.code, message=exc.message)
+        raise
     # The work starts here, so the record says so.
     operations.mark_running(operation.id)
     # A model download is the one operation that can outlast a client's read
@@ -579,7 +595,6 @@ async def acquire_model(
     # poll the idle-polling guardrail polices) and thread-safe the same way: the
     # SQLite repo is ``check_same_thread=False`` with an ``RLock`` and
     # ``NodeHTTPClient`` builds a per-call ``httpx.Client``.
-    models_service = _models_service(request)
     asyncio.get_running_loop().run_in_executor(
         None, _run_acquire, models_service, operations, operation.id, payload
     )
@@ -608,6 +623,7 @@ def _run_acquire(
             nodes=payload.nodes,
             credential=payload.credential,
             file_selector=tuple(payload.file_selector),
+            allow_upstream_fallback=payload.allow_upstream_fallback,
         )
         per_node = {n: {"state": "succeeded"} for n in payload.nodes}
         operations.succeed(operation_id, per_node_outcomes=per_node)
@@ -619,6 +635,13 @@ def _run_acquire(
             # operation would stay running forever — so fall back to a plain
             # failure record if the structured one itself threw.
             operations.fail(operation_id, code="model_acquire_failed", message=str(exc))
+    finally:
+        models_service.release_acquisition(
+            source_id=payload.source_id,
+            source_model_id=payload.source_model_id,
+            file_selector=tuple(payload.file_selector),
+            operation_id=operation_id,
+        )
 
 
 @router.get(

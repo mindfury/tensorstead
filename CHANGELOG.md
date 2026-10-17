@@ -25,7 +25,26 @@ is versioned separately (`stead status` reports both).
   digest, and both the coordinator and the agent check it. It can't arrive
   through `extra_args`. Authorization policy is now `2026-10-16.1`.
 
+### Fixed
+- **A model is downloaded from the Internet once, not once per node.**
+  Multi-node acquires were meant to fetch on the first node and replicate to
+  the rest, but replication needs a content digest, and the real Hugging Face
+  adapter never reported one (only the test fake did). So every additional node
+  silently downloaded the whole model again: 165 GiB twice for GLM-5.3. The
+  agent now computes the digest itself after verifying a download.
+
 ### Changed
+- **Failed replication is refused, not papered over.** When a node already
+  holds the model and copying it to another node fails, the acquire fails with
+  `replication_failed`, naming both nodes and the reason. It no longer falls
+  back to a second upstream download. `allow_upstream_fallback`
+  (`--allow-upstream-fallback`, MCP `model_acquire`) opts back in.
+- **One download per repository at a time.** An acquire for a repository that
+  is already being acquired is refused at once with `acquisition_in_progress`
+  (HTTP 409), naming the running operation and its nodes. Before, it waited
+  behind the first on a lock, holding the request open. The check keys on
+  source, model and file selection but not on revision, so `main` and the
+  commit it names can't download side by side.
 - Approval refusals name the option's own reason instead of always saying it
   "loads code".
 
