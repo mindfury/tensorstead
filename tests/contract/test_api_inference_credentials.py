@@ -22,17 +22,20 @@ _SECRET = "sk-inference-do-not-leak"
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # File imports are read only from the configured import directory (CG-03).
+    (tmp_path / "imports").mkdir()
+    monkeypatch.setenv("TENSORSTEAD_CREDENTIAL_IMPORT_DIR", str(tmp_path / "imports"))
     app, _ = build_test_coordinator()
     return TestClient(app)
 
 
 def _store(client: TestClient, name: str, tmp_path: Path) -> None:
-    secret_file = tmp_path / f"{name}.secret"
+    secret_file = tmp_path / "imports" / f"{name}.secret"
     secret_file.write_text(_SECRET, encoding="utf-8")
     resp = client.put(
         f"/v1/inference-credentials/{name}",
-        json={"from_file": str(secret_file)},
+        json={"from_file": secret_file.name},
         headers=_AUTH,
     )
     assert resp.status_code == 200, resp.text

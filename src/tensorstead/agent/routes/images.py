@@ -248,7 +248,11 @@ def import_image(payload: ImageImportRequest, request: Request) -> ImageProduced
     """Import a prebuilt archive, verifying it before it becomes available."""
     engine = request.app.state.container_engine
     archive = _managed_archive(request, payload.archive_name)
-    image_id = engine.import_image(archive_path=str(archive))
+    image_id = engine.import_image(
+        archive_path=str(archive),
+        expected_id=payload.expected_image_id,
+        allowed_names=frozenset({payload.reference}),
+    )
     if payload.expected_image_id is not None and image_id != payload.expected_image_id:
         # Refused rather than reported: a mismatched archive must not become an
         # available image. The daemon already loaded it by this

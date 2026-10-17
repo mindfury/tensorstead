@@ -101,6 +101,12 @@ class FakeNodeClient:
         # the other succeeds. Unset nodes share the default agent, which keeps
         # every existing single-node test behaving exactly as before.
         self.agents: dict[str, FakeNodeAgent] = {}
+        # Every create payload, with the node it went to, so a test can assert
+        # what each rank was actually sent -- a credential included.
+        self.create_payloads: list[tuple[str, dict[str, Any]]] = []
+        # Every node-touching call, in order, so a test can assert that a
+        # refusal happened before any of them.
+        self.node_calls: list[str] = []
 
     def agent_for(self, node_id: str) -> FakeNodeAgent:
         """The agent standing in for ``node_id`` (the default unless assigned)."""
@@ -203,6 +209,7 @@ class FakeNodeClient:
         return {"image_id": f"sha256:built-{reference}", "reference": reference, "origin": "built"}
 
     def list_images(self, node: Node) -> list[dict[str, Any]]:
+        self.node_calls.append("list_images")
         agent = self._for(node)
         if agent.unreachable:
             raise AgentCallError(
@@ -212,6 +219,7 @@ class FakeNodeClient:
 
     def pull_image(self, node: Node, *, reference: str) -> dict[str, Any]:
         """A registry pull: on the containerd store, the id of a pinned pull is its digest."""
+        self.node_calls.append("pull_image")
         agent = self._for(node)
         if agent.unreachable:
             raise AgentCallError(
@@ -233,6 +241,7 @@ class FakeNodeClient:
         tests against a purpose-built stub and had never once run through the
         real wiring.
         """
+        self.node_calls.append("distribute_image")
         _reject_what_a_real_agent_would("distribute_image", payload)
         # What arrives is held as a real daemon holds it after docker load: a
         # digest-pinned reference does not survive, only the bare id does
@@ -258,6 +267,8 @@ class FakeNodeClient:
 
     def create_deployment(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         _reject_what_a_real_agent_would("create_deployment", payload)
+        self.create_payloads.append((node.id, dict(payload)))
+        self.node_calls.append("create_deployment")
         try:
             self._for(node).create_deployment(
                 payload["deployment_id"], endpoint=payload["endpoint"]

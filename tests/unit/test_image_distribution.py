@@ -145,7 +145,7 @@ class _Engine:
         self.materializable = materializable
         self.materializability_checked: list[str] = []
 
-    def import_image(self, *, archive_path: str) -> str:
+    def import_image(self, *, archive_path: str, **_policy: Any) -> str:
         return self.loads_as
 
     def verify_image_materializable(self, *, image_id: str) -> None:

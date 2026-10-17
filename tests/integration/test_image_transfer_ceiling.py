@@ -26,7 +26,7 @@ _IMAGE_ID = "sha256:000000000000000000000000000000000000000000000000000000000000
 
 
 class _LoadingEngine:
-    def import_image(self, *, archive_path: str) -> str:
+    def import_image(self, *, archive_path: str, **_policy: Any) -> str:
         return _IMAGE_ID
 
     def verify_image_materializable(self, *, image_id: str) -> None:

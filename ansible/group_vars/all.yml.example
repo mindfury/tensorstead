@@ -17,6 +17,10 @@ tensorstead_mcp_port: 8090
 tensorstead_mcp_path: /mcp
 tensorstead_coordinator_store: /var/lib/tensorstead/coordinator/tensorstead.db
 tensorstead_coordinator_credentials_dir: /var/lib/tensorstead/coordinator/credentials
+# Where `credential set --from-file` / `inferencekey set --from-file` may read
+# from. Must not overlap the credentials dir, the coordinator state dir, or
+# /etc/tensorstead; the coordinator refuses file imports if it does.
+tensorstead_coordinator_credential_import_dir: /var/lib/tensorstead/credential-imports
 tensorstead_agent_bind_host: 0.0.0.0
 tensorstead_agent_port: 8443
 tensorstead_agent_model_store: /var/lib/tensorstead/models

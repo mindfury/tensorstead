@@ -277,7 +277,13 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         ] = None,
         from_file: Annotated[
             str | None,
-            Field(description="File holding the secret. A reference, never the value."),
+            Field(
+                description=(
+                    "Name of a file inside the coordinator's credential import directory "
+                    "(TENSORSTEAD_CREDENTIAL_IMPORT_DIR) holding the secret. A reference, "
+                    "never the value; paths outside that directory are refused."
+                )
+            ),
         ] = None,
     ) -> ApiResult:
         """Store an inference credential from a reference."""
@@ -536,7 +542,13 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         ] = None,
         from_file: Annotated[
             str | None,
-            Field(description="File holding the secret. A reference, never the value."),
+            Field(
+                description=(
+                    "Name of a file inside the coordinator's credential import directory "
+                    "(TENSORSTEAD_CREDENTIAL_IMPORT_DIR) holding the secret. A reference, "
+                    "never the value; paths outside that directory are refused."
+                )
+            ),
         ] = None,
         default: Annotated[
             bool, Field(description="Make this the source default credential.")
@@ -546,9 +558,9 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
 
         There is deliberately no parameter that takes a secret value. Give
         ``from_env`` (an environment variable the coordinator reads) or
-        ``from_file`` (a path the coordinator reads). The secret never passes
-        through this tool call, so it never lands in an agent's context or in a
-        transcript its host retains.
+        ``from_file`` (a file in the coordinator's credential import directory).
+        The secret never passes through this tool call, so it never lands in an
+        agent's context or in a transcript its host retains.
 
         Honest limitation: a human must still have placed that variable or
         file. What this buys is that an agent can finish a gated-model setup

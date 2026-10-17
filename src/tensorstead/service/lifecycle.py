@@ -143,8 +143,7 @@ class LifecycleService:
             # outcomes. Raises before the save below if any node
             # failed, so desired state is never recorded as changed on a
             # half-applied operation.
-            self._stage_image(revision)
-            self._drive_nodes(revision, "start", self._create_on)
+            self._materialize(revision)
 
             # Records the revision the nodes were last successfully *asked* to
             # run. Declared state, not observed: it is written because the
@@ -672,14 +671,25 @@ class LifecycleService:
             raise NotFoundError(
                 f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
             )
-        # Resolved once, here, rather than once per node inside _create_on
-        # (which used to re-resolve it concurrently, redundantly, in every
-        # dispatched thread). The binding is per-deployment, not per-node, so
-        # a broken credential is the identical failure on every node and
-        # should fail the whole start immediately -- before any node is
-        # touched -- rather than surface as several identical per-node
-        # failures. Uncaught deliberately: see
-        # _resolve_inference_credential.
+        self._materialize(revision)
+
+    def _materialize(self, revision: Any) -> None:
+        """Create the revision's containers on every node: the one path that does.
+
+        ``start`` and ``restart`` both come here. ``start`` used to drive the
+        nodes itself without resolving the inference-credential binding, so an
+        initial start sent no credential and the agent fell back to its node
+        default key, or to none (CodeGuard CG-01); only a restart honoured the
+        binding.
+
+        Order matters. The credential is resolved before anything touches a
+        node -- image staging included -- so a binding that cannot be resolved
+        refuses the start with ``credential_resolution_failed`` while every
+        node is still as it was, rather than after images were pulled. Resolved
+        once rather than per node: the binding is per deployment, so a broken
+        one is the identical failure everywhere. Uncaught deliberately: see
+        ``_resolve_inference_credential``.
+        """
         credential = self._resolve_inference_credential(revision.deployment_id)
         self._stage_image(revision)
         self._drive_nodes(

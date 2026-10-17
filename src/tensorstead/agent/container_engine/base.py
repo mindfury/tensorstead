@@ -124,19 +124,27 @@ class ContainerEngine(Protocol):
         the host itself.
         """
 
-    def import_image(self, *, archive_path: str) -> str:
+    def import_image(
+        self,
+        *,
+        archive_path: str,
+        expected_id: str | None = None,
+        allowed_names: frozenset[str] = frozenset(),
+    ) -> str:
         """Load an image archive and return the produced image identifier.
 
-        For estates that cannot reach a registry, and for vendor-supplied
-        images. The caller verifies the archive against its stated digest
-        before the image is recorded as an available Tensorstead image,
-        and partially acquired models are verified under the same rule.
-        That verification necessarily happens *after* this call, not
-        before it -- the engine has no way to compute an archive's resulting
-        image id without loading it. A caller whose comparison fails must
-        call ``remove_image`` with the id this returned: an unrecorded image
-        left in the daemon is a poisoned tag a later start could pick up, not
-        merely wasted storage.
+        For estates that cannot reach a registry, for vendor-supplied images,
+        and for peer distribution. Before anything is loaded, the archive's own
+        declaration (``index.json``) must name exactly one image, identified as
+        ``expected_id`` when given, carrying no name outside ``allowed_names``
+        (``agent/image_archive.py``; CodeGuard CG-04). ``docker load`` takes
+        every image and tag an archive carries, so checking only what came back
+        afterwards -- as this once did, and only the first image -- left the
+        rest behind.
+
+        The caller still compares the returned id and calls ``remove_image``
+        on a mismatch; the pre-load check is what stops extra images and tags
+        reaching the daemon at all.
         """
 
     def verify_image_materializable(self, *, image_id: str) -> None:
