@@ -4,7 +4,7 @@
 # (a host-level tool can export one and shadow the project venv).
 UV = PYTHONPATH= uv run
 
-.PHONY: help require-operator-profile prepare-nodes build builds test test-unit test-contract test-integration test-hardware test-smoke lint typecheck coverage deadcode audit check ansible-check release-local deploy readiness hooks-install hooks-uninstall hooks-status hooks-install-server hooks-status-server services-status services-start services-restart services-stop services-boot-disable services-boot-enable reboot
+.PHONY: help require-operator-profile prepare-nodes build builds verify-release deploy-release test test-unit test-contract test-integration test-hardware test-smoke lint typecheck coverage deadcode audit check ansible-check release-local deploy readiness hooks-install hooks-uninstall hooks-status hooks-install-server hooks-status-server services-status services-start services-restart services-stop services-boot-disable services-boot-enable reboot
 
 # A local, ignored profile may safely name token files and the existing
 # appliance endpoints. It must never contain a secret value.
@@ -22,6 +22,8 @@ UV = PYTHONPATH= uv run
 # long-lived operator settings file cannot accidentally redeploy an old wheel.
 TENSORSTEAD_RELEASE_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
 TENSORSTEAD_DEPLOY_ARTIFACT ?= $(CURDIR)/dist/tensorstead-$(TENSORSTEAD_RELEASE_VERSION)-py3-none-any.whl
+# The exact, hash-verified dependency set for the appliances (scripts/build_wheelhouse.py).
+TENSORSTEAD_DEPLOY_WHEELHOUSE ?= $(CURDIR)/dist/tensorstead-$(TENSORSTEAD_RELEASE_VERSION)-wheelhouse
 TENSORSTEAD_INVENTORY ?=
 TENSORSTEAD_SETTINGS ?=
 TENSORSTEAD_VAULT ?=
@@ -52,6 +54,7 @@ help:
 # number and SHA-256. This target never contacts an appliance.
 build:
 	$(UV) python scripts/build_package.py
+	$(UV) --with pip python scripts/build_wheelhouse.py
 
 # List the archived per-build wheels under dist/builds/ (build number + the git
 # revision each was built from) so the build to roll back to is one glance, not
@@ -163,9 +166,8 @@ TENSORSTEAD_RUFF_VERSION := $(shell awk '/^name = "ruff"/{f=1} f&&/^version = /{
 hooks-install-server:
 	@echo "installing ruff $(TENSORSTEAD_RUFF_VERSION) on $(TENSORSTEAD_GIT_HOST)"
 	@ssh $(TENSORSTEAD_GIT_HOST) 'set -e; \
-	  command -v ruff >/dev/null 2>&1 || python3 -m pip install --user --quiet "ruff==$(TENSORSTEAD_RUFF_VERSION)"; \
-	  src=$$(command -v ruff || echo $$HOME/.local/bin/ruff); \
-	  sudo install -m 0755 "$$src" /usr/local/bin/ruff; \
+	  python3 -m pip install --user --quiet "ruff==$(TENSORSTEAD_RUFF_VERSION)"; \
+	  sudo install -m 0755 "$$HOME/.local/bin/ruff" /usr/local/bin/ruff; \
 	  /usr/local/bin/ruff --version'
 	@scp -q ops/githooks/server/pre-receive $(TENSORSTEAD_GIT_HOST):$(TENSORSTEAD_GIT_DIR)/hooks/pre-receive
 	@ssh $(TENSORSTEAD_GIT_HOST) 'chmod +x $(TENSORSTEAD_GIT_DIR)/hooks/pre-receive'
@@ -234,11 +236,27 @@ require-operator-profile:
 deploy:
 	@$(MAKE) --no-print-directory require-operator-profile
 	@test -f "$(TENSORSTEAD_DEPLOY_ARTIFACT)" || (echo "Wheel not found: $(TENSORSTEAD_DEPLOY_ARTIFACT). Run make release-local first."; exit 2)
+	@test -f "$(TENSORSTEAD_DEPLOY_WHEELHOUSE)/wheelhouse.json" || (echo "Wheelhouse not found: $(TENSORSTEAD_DEPLOY_WHEELHOUSE). Run make release-local first."; exit 2)
 	$(UV) ansible-playbook -i "$(TENSORSTEAD_INVENTORY)" ansible/playbooks/site.yml \
 		-e @"$(TENSORSTEAD_SETTINGS)" \
 		-e @"$(TENSORSTEAD_VAULT)" \
 		-e tensorstead_package_artifact="$(TENSORSTEAD_DEPLOY_ARTIFACT)" \
+		-e tensorstead_package_wheelhouse="$(TENSORSTEAD_DEPLOY_WHEELHOUSE)" \
 		$(TENSORSTEAD_VAULT_AUTH) $(TENSORSTEAD_BECOME_AUTH)
+
+# Deploy a *published* release, after proving its provenance: every asset must
+# carry an attestation signed by this repository's release workflow at the
+# matching tag, and match the attested SHA256SUMS (CodeGuard CG-17). Nothing is
+# installed if any check fails. `make deploy` remains the path for local,
+# unattested development builds.
+verify-release:
+	@test -n "$(VERSION)" || (echo "usage: make verify-release VERSION=x.y.z"; exit 2)
+	$(UV) python scripts/verify_release.py $(VERSION)
+
+deploy-release: verify-release
+	@$(MAKE) --no-print-directory deploy \
+		TENSORSTEAD_DEPLOY_ARTIFACT=$(CURDIR)/dist/release-$(VERSION)/tensorstead-$(VERSION)-py3-none-any.whl \
+		TENSORSTEAD_DEPLOY_WHEELHOUSE=$(CURDIR)/dist/release-$(VERSION)/tensorstead-$(VERSION)-wheelhouse
 
 # Bring freshly reimaged nodes to the state site.yml expects: access, headless
 # boot, a reachable GRUB menu, and the ConnectX-7 fabric. Independent of deploy

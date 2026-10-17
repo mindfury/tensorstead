@@ -30,6 +30,21 @@
     fail_msg: tensorstead_package_artifact must point to a wheel built on the Ansible controller.
   run_once: true
 
+# The dependency set installed with the wheel is the reviewed lock, hash-verified
+# and offline (CodeGuard CG-14). Without it a deploy would resolve dependencies
+# fresh against an index, so it is required rather than optional.
+- name: Read the wheelhouse manifest on the controller
+  ansible.builtin.slurp:
+    src: "{{ tensorstead_package_wheelhouse }}/wheelhouse.json"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: common_wheelhouse_manifest_raw
+
+- name: Record the wheelhouse target
+  ansible.builtin.set_fact:
+    common_wheelhouse: "{{ common_wheelhouse_manifest_raw.content | b64decode | from_json }}"
+
 - name: Check Docker container runtime prerequisite
   ansible.builtin.command:
     cmd: docker info
