@@ -235,3 +235,9 @@ class ReplicationFailedError(DomainError):
     """
 
     code = "replication_failed"
+
+
+class ImageStagingError(DomainError):
+    """An image could not be put on every node without a second registry pull."""
+
+    code = "image_staging_failed"

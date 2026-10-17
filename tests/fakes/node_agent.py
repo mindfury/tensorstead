@@ -103,6 +103,9 @@ class FakeNodeAgent:
         # An unreachable agent simulates a network failure so the
         # coordinator's observation degrades to ``unreachable``.
         self.unreachable = False
+        # Images the daemon holds, reference -> local id, as GET /images reports.
+        self.images: dict[str, str] = {}
+        self.image_pulls: list[str] = []
         # Configurable resource readings. Defaults match
         # the prior fixed return so existing tests stay unchanged.
         self._resources: dict[str, Any] | None = None

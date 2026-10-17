@@ -9,6 +9,7 @@ onto the node-client port the coordinator services call.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -201,6 +202,27 @@ class FakeNodeClient:
         reference = str(payload.get("reference", ""))
         return {"image_id": f"sha256:built-{reference}", "reference": reference, "origin": "built"}
 
+    def list_images(self, node: Node) -> list[dict[str, Any]]:
+        agent = self._for(node)
+        if agent.unreachable:
+            raise AgentCallError(
+                code="agent_unreachable", message="simulated agent unreachable", node_id=node.id
+            )
+        return [{"reference": r, "digest": d} for r, d in agent.images.items()]
+
+    def pull_image(self, node: Node, *, reference: str) -> dict[str, Any]:
+        """A registry pull: on the containerd store, the id of a pinned pull is its digest."""
+        agent = self._for(node)
+        if agent.unreachable:
+            raise AgentCallError(
+                code="agent_unreachable", message="simulated agent unreachable", node_id=node.id
+            )
+        _, sep, pinned = reference.rpartition("@")
+        image_id = pinned if sep else "sha256:" + hashlib.sha256(reference.encode()).hexdigest()
+        agent.images[reference] = image_id
+        agent.image_pulls.append(reference)
+        return {"digest": image_id}
+
     def distribute_image(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         """Pull a produced image from a peer and return the identifier that arrived.
 
@@ -212,6 +234,13 @@ class FakeNodeClient:
         real wiring.
         """
         _reject_what_a_real_agent_would("distribute_image", payload)
+        # What arrives is held as a real daemon holds it after docker load: a
+        # digest-pinned reference does not survive, only the bare id does
+        # (measured on the Sparks, 2026-10-16); a tag does.
+        expected = str(payload.get("expected_image_id", ""))
+        reference = str(payload.get("reference", ""))
+        held_as = expected if "@sha256:" in reference else reference
+        self._for(node).images[held_as] = expected
         return {
             "image_id": str(payload.get("expected_image_id", "")),
             "reference": str(payload.get("reference", "")),

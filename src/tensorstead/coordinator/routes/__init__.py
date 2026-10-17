@@ -29,6 +29,7 @@ from tensorstead.contracts.api import (
     DeploymentResponse,
     DeploymentRuntimeResponse,
     DeploymentStatusResponse,
+    ImagePullRequest,
     ModelAcquireRequest,
     ModelReplica,
     ModelResponse,
@@ -411,6 +412,43 @@ def _run_build(
         return
 
     operations.succeed(operation_id, per_node_outcomes=per_node)
+
+
+@router.post(
+    "/images:pull",
+    response_model=OperationAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_auth_dep)],
+)
+async def pull_image(payload: ImagePullRequest, request: Request) -> OperationAcceptedResponse:
+    """Stage an image on nodes ahead of a start: one registry pull, copies for the rest.
+
+    Long-running for a runtime image (gigabytes), so it is an operation polled
+    to terminal like a model acquire.
+    """
+    operations = request.app.state.operations_service
+    operation = operations.begin(
+        kind=OperationKind.IMAGE_ACQUIRE, target_type="image", target_id=new_ulid()
+    )
+    operations.mark_running(operation.id)
+    stager = request.app.state.image_stager
+    asyncio.get_running_loop().run_in_executor(
+        None, _run_image_pull, stager, operations, operation.id, payload
+    )
+    return OperationAcceptedResponse(operation_id=operation.id)
+
+
+def _run_image_pull(
+    stager: Any, operations: Any, operation_id: str, payload: ImagePullRequest
+) -> None:
+    try:
+        outcomes = stager.stage(payload.reference, list(payload.nodes))
+        operations.succeed(operation_id, per_node_outcomes=outcomes)
+    except Exception as exc:
+        try:
+            _record_failure(operations, operation_id, exc, default_code="image_pull_failed")
+        except Exception:
+            operations.fail(operation_id, code="image_pull_failed", message=str(exc))
 
 
 @router.post("/images:import", dependencies=[Depends(require_auth_dep)])

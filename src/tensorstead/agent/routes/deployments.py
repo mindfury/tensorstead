@@ -34,6 +34,7 @@ from tensorstead.agent import cache_store, host_network
 from tensorstead.agent.app import require_management
 from tensorstead.domain.approvals import fingerprint, normalize_option
 from tensorstead.domain.identity import is_valid_ulid
+from tensorstead.domain.models import pinned_digest
 
 router = APIRouter(prefix="/agent/v1", tags=["deployments"])
 
@@ -767,6 +768,17 @@ def _resolve_image(engine: Any, reference: str) -> str:
         local = present(reference)
         if local:
             return str(local)
+        # A digest-pinned reference whose name did not resolve may still be
+        # here under its content address. An image copied from a peer arrives
+        # without its ``name@digest`` reference -- docker save/load does not
+        # carry one -- so it is held only by id (measured on the Sparks,
+        # 2026-10-16). On the containerd image store that id *is* the manifest
+        # digest the reference pins, so the match is exact; on the classic
+        # store the id is the config digest, never equal, and this falls
+        # through to the pull as before.
+        pinned = pinned_digest(reference)
+        if pinned is not None and present(pinned) == pinned:
+            return pinned
     return str(engine.pull_image(reference))
 
 

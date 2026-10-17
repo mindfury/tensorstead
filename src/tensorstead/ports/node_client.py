@@ -100,6 +100,12 @@ class NodeClient(Protocol):
     def build_image(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         """``POST /agent/v1/images:build`` — produce an image from a spec."""
 
+    def pull_image(self, node: Node, *, reference: str) -> dict[str, Any]:
+        """``POST /agent/v1/images:pull`` — pull ``reference`` from its registry.
+
+        Returns ``{"digest"}``, the image's local identifier.
+        """
+
     def distribute_image(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         """``POST /agent/v1/images:distribute`` — pull an image from a peer."""
 

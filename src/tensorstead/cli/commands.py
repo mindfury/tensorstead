@@ -2505,6 +2505,27 @@ def image_build(
     _post_and_poll("/v1/images:build", payload, json_mode, default_code="image_build_failed")
 
 
+@images_app.command("pull")
+def image_pull(
+    reference: Annotated[
+        str, typer.Argument(help="Image reference; pin it by digest (repo@sha256:...).")
+    ],
+    node: Annotated[list[str], typer.Option("--node", help="Node name. Repeat for several nodes.")],
+    json_mode: Annotated[
+        bool, typer.Option("--json", help="Emit JSON for machine consumption.")
+    ] = False,
+) -> None:
+    """Put a registry image on nodes, pulling it from the registry once.
+
+    A node that already holds it is the source; otherwise the first node pulls
+    it, and every other node copies it from that node. Use it to stage a
+    runtime image before a planned start, so the download is not part of the
+    downtime. A multi-node start does the same thing itself.
+    """
+    payload = {"reference": reference, "nodes": [_get_node(name)["id"] for name in node]}
+    _post_and_poll("/v1/images:pull", payload, json_mode, default_code="image_pull_failed")
+
+
 @images_app.command("import")
 def image_import(
     archive: Annotated[str, typer.Argument(help="Archive file name in the node image store.")],
