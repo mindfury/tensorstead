@@ -338,6 +338,22 @@ The profile holds **paths only**. The Vault file it names stays encrypted, and
 its password and your sudo password are prompted for at deploy time — never
 stored in the profile, the repository, or your shell history.
 
+### Deploying a published release
+
+`make deploy` installs what this checkout built. To install a published
+release instead, use:
+
+```sh
+make deploy-release VERSION=1.7.0
+```
+
+It downloads the release and refuses to deploy unless every asset carries
+signed build provenance from this repository's `release.yml` at the matching
+tag and matches the attested `SHA256SUMS` (`scripts/verify_release.py`; needs
+`gh` authenticated). Either path installs dependencies the same way: offline
+from the release's wheelhouse, hash-checked against `uv.lock`, with nothing
+resolved against an index.
+
 ### The artifact comes from the checkout you run in
 
 `make deploy` derives the wheel from the version in *this* checkout's

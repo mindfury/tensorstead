@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Server-side gate for the bare repository on the git host.
 #
 # Installed at /srv/git/tensorstead.git/hooks/pre-receive. Unlike the
@@ -8,96 +8,91 @@
 # gates anything that can push, including an agent having a bad night.
 #
 # SCOPE, deliberately narrow: formatting and lint on the Python files a push
-# actually changes. Not tests, not mypy, not coverage.
+# actually changes. Not tests, not mypy, not coverage -- those need the full
+# uv-managed venv on a box whose job is serving git (see README.md).
 #
-# Those need the full uv-managed venv, which would mean installing and then
-# *tracking* this project's dependencies on a box whose job is serving git.
-# First run would be minutes and every
-# dependency change would need mirroring. The marginal catch over the pre-push
-# hook is small for a single-developer repository, and the cost is a permanent
-# second installation that can drift. Tests stay on the developer machine.
+# EACH REF IS JUDGED ON ITS OWN TREE (CodeGuard CG-13). The previous version
+# pooled every ref's changed paths but materialised only the *last* ref's tree,
+# so in a multi-ref push a violating file in one ref was checked against another
+# ref's clean copy, or skipped when that ref lacked it. Diff errors were
+# swallowed (an unreadable diff read as "no Python changed") and filenames were
+# word-split. Now: one tree per ref, NUL-separated file lists, and any git
+# failure refuses the push.
 #
-# Ruff alone is one static binary, needs no venv, and catches the class that
-# actually broke `main`: a file that was never formatted.
+# PATH-GATED per ref: a ref carrying no Python costs one diff.
 #
-# PATH-GATED. Eleven of the last fifteen commits here changed no Python at all
-# -- records and documentation. A push carrying none exits before doing any
-# work, so recording a finding mid-incident is never delayed by this.
-#
-# FAILS CLOSED. If ruff is missing or the wrong version, pushes are refused
-# rather than waved through: a gate that silently stops gating is the exact
-# failure this repository is built around. Recovery, if you are ever locked out:
+# FAILS CLOSED. Missing ruff, a ruff whose version differs from the one the
+# pushed ref's own uv.lock pins, or any step that cannot run refuses the push.
+# Recovery, if you are ever locked out:
 #   ssh git.internal 'rm /srv/git/tensorstead.git/hooks/pre-receive'
 
-set -u
+set -u -o pipefail
 
-RUFF=/usr/local/bin/ruff
-WANT=0.16.2                                              # must match uv.lock
+# Overridable only from the hook's own environment on the server (the tests use
+# this); a pusher cannot set it.
+RUFF=${TENSORSTEAD_HOOK_RUFF:-/usr/local/bin/ruff}
 EMPTY=4b825dc642cb6eb9a060e54bf8d69288fbee4904            # git's empty tree
+MAX_REFS=${TENSORSTEAD_HOOK_MAX_REFS:-50}
+REF_SECONDS=${TENSORSTEAD_HOOK_REF_SECONDS:-300}
 
 fail() { echo "pre-receive: $*" >&2; exit 1; }
 
-changed=""
-while read -r old new _ref; do
+[ -x "$RUFF" ] || fail "ruff is not installed at $RUFF -- this gate fails closed. See ops/githooks/server/README.md"
+have=$("$RUFF" --version 2>/dev/null | awk '{print $2}') || fail "ruff at $RUFF could not report its version"
+budget() { if command -v timeout >/dev/null 2>&1; then timeout "$REF_SECONDS" "$@"; else "$@"; fi; }
+
+tmp_root=$(mktemp -d) || fail "could not create a temp dir"
+trap 'rm -rf "$tmp_root"' EXIT INT TERM
+
+refs=0
+gated=0
+while read -r old new ref; do
+    refs=$((refs + 1))
+    [ "$refs" -le "$MAX_REFS" ] || fail "more than $MAX_REFS refs in one push; push them in smaller groups"
     case "$new" in *[!0]*) ;; *) continue ;; esac        # ref deletion: no code
     case "$old" in *[!0]*) base=$old ;; *) base=$EMPTY ;; esac   # new ref: diff from empty
-    files=$(git diff --name-only "$base" "$new" -- '*.py' 2>/dev/null)
-    [ -n "$files" ] && changed=$(printf '%s\n%s' "$changed" "$files")
-    newest=$new
+
+    # NUL-separated, deletions excluded; a diff that cannot run refuses the push
+    # (it used to be discarded, which read as "no Python changed").
+    list="$tmp_root/$refs.files"
+    git diff -z --name-only --diff-filter=d "$base" "$new" -- '*.py' >"$list" \
+        || fail "$ref: could not diff $base..$new"
+    files=()
+    while IFS= read -r -d '' f; do files+=("$f"); done <"$list"
+    [ "${#files[@]}" -gt 0 ] || continue                  # no Python in this ref
+
+    # This ref's own tree, at its real relative paths: ruff's isort rules need
+    # the layout (src = ["src", "tests"]) to tell first-party from third-party.
+    tree="$tmp_root/$refs"
+    mkdir -p "$tree" || fail "could not create a staging dir"
+    git archive --format=tar -o "$tree.tar" "$new" || fail "$ref: could not materialise $new"
+    tar -x -f "$tree.tar" -C "$tree" || fail "$ref: could not unpack $new"
+    rm -f "$tree.tar"
+    [ -f "$tree/pyproject.toml" ] || fail "$ref: the pushed tree has no pyproject.toml"
+
+    want=$(awk '/^name = "ruff"$/ {getline; gsub(/version = |"/, ""); print; exit}' "$tree/uv.lock" 2>/dev/null)
+    [ -n "$want" ] || fail "$ref: no ruff version is pinned in uv.lock"
+    [ "$have" = "$want" ] || fail "$ref: ruff $have on this host, the ref pins $want -- update the host's ruff"
+
+    present=()
+    for f in "${files[@]}"; do [ -f "$tree/$f" ] && present+=("$f"); done
+    [ "${#present[@]}" -gt 0 ] || continue
+
+    # Ruff exits 1 for violations and 2 when it could not run; collapsing them
+    # would blame the code for a broken gate.
+    (cd "$tree" && budget "$RUFF" format --check -- "${present[@]}") 2>&1; rc=$?
+    [ "$rc" -eq 124 ] && fail "$ref: ruff format exceeded $REF_SECONDS s"
+    [ "$rc" -ge 2 ] && fail "$ref: ruff could not run (exit $rc) -- the gate is broken, not your code"
+    [ "$rc" -eq 1 ] && fail "$ref: ${#present[@]} changed Python file(s): formatting. Fix with 'uv run ruff format .'"
+
+    (cd "$tree" && budget "$RUFF" check -- "${present[@]}") 2>&1; rc=$?
+    [ "$rc" -eq 124 ] && fail "$ref: ruff check exceeded $REF_SECONDS s"
+    [ "$rc" -ge 2 ] && fail "$ref: ruff could not run (exit $rc) -- the gate is broken, not your code"
+    [ "$rc" -eq 1 ] && fail "$ref: ${#present[@]} changed Python file(s): lint. Fix with 'uv run ruff check --fix .' and review the fixes"
+
+    gated=$((gated + ${#present[@]}))
+    rm -rf "$tree"
 done
 
-changed=$(printf '%s\n' "$changed" | sed '/^$/d' | sort -u)
-[ -z "$changed" ] && exit 0                              # no Python: instant pass
-
-case "$RUFF" in /*) ;; *) RUFF=$(cd "$(dirname "$RUFF")" 2>/dev/null && pwd)/$(basename "$RUFF") ;; esac
-[ -x "$RUFF" ] || fail "ruff is not installed at $RUFF -- this gate fails closed. See ops/githooks/server/README.md"
-have=$("$RUFF" --version 2>/dev/null | awk '{print $2}')
-[ "$have" = "$WANT" ] || fail "ruff $have on this host, project pins $WANT -- version skew would disagree with the developer machine"
-
-# The bare repo has no working tree, so the pushed content is materialised into
-# a temp dir at its real relative paths. The paths matter: per-file-ignores in
-# pyproject.toml are globs (`tests/**`, `ops/benchmarks/*.py`), and they
-# only match if the layout is preserved.
-tmp=$(mktemp -d) || fail "could not create a temp dir"
-trap 'rm -rf "$tmp"' EXIT INT TERM
-
-# The WHOLE pushed tree is materialised, not just the changed files, and the
-# reason is not obvious enough to leave unwritten. Ruff's isort rules classify
-# an import as first-party by looking at `src = ["src", "tests"]` against the
-# real layout. Given only the changed files, `src/tensorstead/` may be absent, so
-# `tensorstead` reads as third-party, sorts elsewhere, and every push that touches
-# a test without touching src fails I001 -- a false positive that would train
-# the operator to distrust this gate. Found by testing against real commits.
-#
-# Extraction is cheap here (one archive, no checkout, no network) and buys
-# correctness that per-file extraction cannot.
-git archive "$newest" | tar -x -C "$tmp" || fail "could not materialise the pushed tree"
-[ -f "$tmp/pyproject.toml" ] || fail "the pushed tree has no pyproject.toml"
-
-# Only the changed files are gated, even though the whole tree is present. A
-# push must not be refused for a pre-existing problem in a file it never
-# touched -- that is how a gate starts blocking findings during an incident.
-n=0
-set -- 
-for f in $changed; do
-    [ -f "$tmp/$f" ] || continue                          # deleted by this push
-    set -- "$@" "$f"
-    n=$((n + 1))
-done
-[ "$n" = 0 ] && exit 0
-
-cd "$tmp" || fail "could not enter the staging dir"
-
-# Ruff exits 1 when it finds violations and 2 when it could not run. Collapsing
-# the two would report "your formatting is wrong" for a missing or broken
-# binary, sending the operator to fix code that was never the problem. Naming a
-# failure as the wrong thing is the defect this whole gate exists to prevent.
-"$RUFF" format --check -- "$@" 2>&1; rc=$?
-[ "$rc" -ge 2 ] && fail "ruff could not run (exit $rc) -- the gate is broken, not your code"
-[ "$rc" = 1 ] && fail "$n changed Python file(s): formatting. Fix with 'uv run ruff format .'"
-
-"$RUFF" check -- "$@" 2>&1; rc=$?
-[ "$rc" -ge 2 ] && fail "ruff could not run (exit $rc) -- the gate is broken, not your code"
-[ "$rc" = 1 ] && fail "$n changed Python file(s): lint. Fix with 'uv run ruff check --fix .' and review the fixes"
-
-echo "pre-receive: ruff clean on $n changed Python file(s)"
+[ "$gated" -gt 0 ] && echo "pre-receive: ruff clean on $gated changed Python file(s)"
+exit 0

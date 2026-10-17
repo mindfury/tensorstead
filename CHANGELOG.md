@@ -103,6 +103,57 @@ Fixes from an independent Project CodeGuard review (IDs CG-xx refer to it).
   non-ASCII `str` tokens raised `TypeError`. All three servers now compare
   bytes, so this can't happen, and refuse duplicate Authorization headers.
 
+- **CG-13: the server-side push gate checks every ref on its own.** The
+  `pre-receive` hook gathered changed files from all pushed refs but then
+  checked them against only the *last* ref's tree, so a violation in one ref
+  could pass on another ref's tree. It also split filenames on whitespace, and
+  it treated a failed `git diff` as "no Python changed". Each ref is now diffed
+  and checked against its own tree with NUL-delimited names, under a per-ref
+  time budget. Any diff, archive, ruff or timeout failure refuses the push. The
+  expected ruff version is read from the pushed `uv.lock` instead of a
+  hard-coded pin that had drifted (0.16.2 against a 0.17.0 lock).
+  `make hooks-install-server` now installs the locked version even when an older
+  ruff is already present.
+- **CG-14: appliances install the reviewed dependency set, offline.** Deploys
+  let pip resolve the wheel's lower-bounded dependencies fresh against an index
+  every time. `make build` now also produces
+  `dist/tensorstead-<version>-wheelhouse/`: the `uv.lock` pins for the target
+  platform, each with its hashes, plus the wheels themselves, each re-checked
+  against the lock. Ansible installs from it with
+  `--no-index --require-hashes --only-binary=:all: --no-deps`, then installs
+  Tensorstead with `--no-deps`. A missing or altered wheel fails the deploy, and
+  a wheelhouse built for another platform is refused. The new
+  `tensorstead_package_wheelhouse` variable is required (`make deploy` passes
+  it). The upgrade procedure is in `docs/builds.md`.
+- **CG-16: release publishing is separated from building.** The release
+  workflow ran checkout, dependency install, tests and the build with
+  `contents: write` and a persisted token. Building now runs under
+  `contents: read` with `persist-credentials: false`. A separate `publish` job,
+  the only one with write access, runs in the `release` environment and only
+  attests and uploads the build job's artifacts.
+- **CG-17: releases carry signed provenance, verified before install.**
+  Release assets (wheel, sdist, build manifest, wheelhouse) and a `SHA256SUMS`
+  are attested with `actions/attest-build-provenance` (Sigstore).
+  `make deploy-release VERSION=x.y.z` downloads a release and installs nothing
+  unless every asset verifies:
+  - signed by this repository's `release.yml`;
+  - built from the matching tag;
+  - matching the attested `SHA256SUMS`;
+  - with the wheelhouse matching its manifest.
+
+  `--bundle-dir` verifies offline. Releases before this one carry no
+  attestation and are refused by this path.
+
+### Documentation
+- **ADR 0001** (`docs/adr/0001-trust-boundaries.md`) records three positions the
+  review asked to make explicit:
+  - code approvals are operator attestations, not an independent human
+    authority;
+  - node registration trusts the destination the administrator names;
+  - the audit trail records operations, not per-person identity.
+
+  The MCP approval tool and the README no longer imply more.
+
 ## [1.6.0] - 2026-10-17
 
 ### Added

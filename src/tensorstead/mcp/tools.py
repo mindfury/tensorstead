@@ -471,17 +471,22 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         ],
         image_digest: Annotated[str, Field(description="Runtime image digest, sha256:...")],
         reason: Annotated[str, Field(description="Why this was approved. Required.")],
-        approved_by: Annotated[str, Field(description="Who reviewed it. Required.")],
+        approved_by: Annotated[
+            str,
+            Field(description="Who reviewed it. Required; recorded as stated, not authenticated."),
+        ],
     ) -> ApiResult:
         """Authorize one code-loading option for one exact model/revision/image tuple.
 
         The authorization policy refuses ``trust_remote_code`` because "what
         executes on an appliance is not something a deployment record may decide
         **on its own**". This is the other authority: a separate, immutable,
-        audited record. It is required for models whose vendor guidance needs the
-        flag -- NVIDIA's for ``Qwen3.8-Flash-Next-NVFP4``, for one -- and without
-        it the operator's only route is a hand-started container the coordinator
-        knows nothing about.
+        recorded operator attestation -- not an independent human sign-off, since
+        the caller that creates it can also deploy with it (docs/adr/0001). It
+        is required for models whose vendor guidance needs the flag --
+        NVIDIA's for ``Qwen3.8-Flash-Next-NVFP4``, for one -- and without it the
+        operator's only route is a hand-started container the coordinator knows
+        nothing about.
 
         Binds to an **immutable** revision and an image **digest**. A tag is
         refused: an approval is granted for code that was read at one commit, and

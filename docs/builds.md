@@ -55,6 +55,32 @@ Then deploy that build by pointing the artifact at its archived wheel:
 make deploy TENSORSTEAD_DEPLOY_ARTIFACT=dist/builds/3/tensorstead-1.6.0-py3-none-any.whl
 ```
 
+### Dependency upgrades (requalification)
+
+Appliances install exactly the dependency set in `uv.lock`: offline, every
+wheel hash-checked, nothing resolved, no source builds. A dependency therefore
+changes on an appliance only through this procedure:
+
+1. Change the dependency (`uv lock --upgrade-package <name>`, or a Dependabot
+   PR). Review the lock diff.
+2. `make check` must pass against the new lock. CI runs the same check with
+   `uv sync --locked`.
+3. `make build` regenerates the wheelhouse from the new lock. It refuses any
+   pin without a hash, any downloaded file whose hash is not in the lock, and
+   any pin with no wheel for the target (`linux-aarch64-cp312`). A dependency
+   that publishes no aarch64 wheel fails here, not on an appliance.
+4. Deploy the build. Reinstalling the same build cannot move a dependency,
+   because pip is given no index to resolve against.
+
+A new appliance platform needs a new entry in `TARGETS` in
+`scripts/build_wheelhouse.py`. The deploy refuses a wheelhouse whose target does
+not match the host venv.
+
+A deploy also needs the version's dependency wheelhouse
+(`dist/tensorstead-<version>-wheelhouse/`, built by `make build`); a rollback to
+a build of the same version reuses it. Rolling back across a `uv.lock` change
+means pointing `TENSORSTEAD_DEPLOY_WHEELHOUSE` at that build's wheelhouse too.
+
 The default `make deploy` path is unchanged — it is still the latest build of
 the checked-in version — so this override is the only thing that changes. The
 archived wheel is a real, installable wheel (the same one `uv build` produced),
