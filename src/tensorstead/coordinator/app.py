@@ -201,7 +201,10 @@ def _wire_services(
     # NodeHTTPClient needs it at construction, not after.
     provider = credential_provider or _default_credential_provider()
     app.state.credential_provider = provider
-    app.state.credentials_service = CredentialService(repository, provider)
+    import_root, protected = _credential_import_policy(provider, store)
+    app.state.credentials_service = CredentialService(
+        repository, provider, import_root=import_root, protected=protected
+    )
 
     if node_client is None:
         from tensorstead.coordinator.node_http import NodeHTTPClient
@@ -235,7 +238,9 @@ def _wire_services(
 
     # The product owns the inference credential, storing a reference
     # and resolving it per start.
-    app.state.inference_credentials = InferenceCredentialService(repository, provider)
+    app.state.inference_credentials = InferenceCredentialService(
+        repository, provider, import_root=import_root, protected=protected
+    )
     # The product builds and imports runtime images, so repairing a broken upstream
     # image does not require SSH.
     app.state.image_builds = ImageBuildService(repository, node_client)
@@ -256,6 +261,23 @@ def _wire_services(
     # terminated are marked failed with outcome_unknown — no probe, no replay.
     _repo = app.state.repository
     _repo.resolve_non_terminal_operations(finished_at=datetime.now().astimezone())
+
+
+def _credential_import_policy(provider: Any, store: Any) -> tuple[Path | None, list[Path]]:
+    """Where ``from_file`` credential imports may be read from, and what it must not overlap.
+
+    ``TENSORSTEAD_CREDENTIAL_IMPORT_DIR``; unset disables file imports. The
+    credential store and the coordinator's state directory are protected:
+    an import directory overlapping either is refused (CodeGuard CG-03).
+    """
+    raw = os.environ.get("TENSORSTEAD_CREDENTIAL_IMPORT_DIR", "").strip()
+    protected: list[Path] = []
+    provider_root = getattr(provider, "root", None)
+    if provider_root is not None:
+        protected.append(Path(provider_root))
+    if isinstance(store, (str, Path)) and str(store) not in ("", ":memory:"):
+        protected.append(Path(store).parent)
+    return (Path(raw) if raw else None), protected
 
 
 def _default_credential_provider() -> Any:

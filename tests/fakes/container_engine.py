@@ -135,7 +135,13 @@ class FakeContainerEngine:
                 f"failed to read config content for {image_id}", reference=image_id
             )
 
-    def import_image(self, *, archive_path: str) -> str:
+    def import_image(
+        self,
+        *,
+        archive_path: str,
+        expected_id: str | None = None,
+        allowed_names: frozenset[str] = frozenset(),
+    ) -> str:
         """Report whatever ``import_image_returns`` is set to, ignoring content.
 
         Set by the test before calling, matching a real ``docker load``: the

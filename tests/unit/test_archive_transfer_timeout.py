@@ -70,6 +70,19 @@ def _digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _whole_image_id() -> str:
+    """The manifest digest ``_whole_image_archive`` declares -- what loading it yields.
+
+    An import is refused before loading unless the archive declares exactly the
+    image that comes back (CodeGuard CG-04), so the fake load returns this.
+    """
+    config = b'{"architecture":"arm64","os":"linux"}'
+    manifest = json.dumps(
+        {"config": {"digest": _digest(config)}, "layers": [{"digest": _digest(b"layer")}]}
+    ).encode()
+    return _digest(manifest)
+
+
 class _FakeDockerModule:
     """Stands in for the ``docker`` package to record how clients are built."""
 
@@ -85,7 +98,7 @@ class _FakeClient:
     class images:  # mirrors docker-py's attribute name
         @staticmethod
         def load(_payload: bytes) -> list[Any]:
-            return [type("Image", (), {"id": "sha256:imported"})()]
+            return [type("Image", (), {"id": _whole_image_id()})()]
 
         @staticmethod
         def get(_reference: str) -> Any:
@@ -115,7 +128,7 @@ def test_the_archive_client_is_built_with_the_dedicated_timeout(
 ) -> None:
     """The defect: this client used to be built with the 60s default."""
     archive = tmp_path / "image.tar"
-    archive.write_bytes(b"tar")
+    archive.write_bytes(_whole_image_archive())
 
     DockerEngine().import_image(archive_path=str(archive))
 
@@ -149,7 +162,7 @@ class _RecordingImagesClient:
             @staticmethod
             def load(payload: Any) -> list[Any]:
                 outer.received.append(payload)
-                return [type("Image", (), {"id": "sha256:imported"})()]
+                return [type("Image", (), {"id": _whole_image_id()})()]
 
         self.images = images
 
@@ -173,7 +186,7 @@ def test_import_image_passes_a_file_object_not_a_read_call(
 
     monkeypatch.setitem(sys.modules, "docker", _RecordingDockerModule())
     archive = tmp_path / "image.tar"
-    archive.write_bytes(b"tar-bytes")
+    archive.write_bytes(_whole_image_archive())
 
     DockerEngine().import_image(archive_path=str(archive))
 
@@ -220,7 +233,7 @@ def test_a_timed_out_import_names_the_limit_it_reached(tmp_path: Any) -> None:
                 raise TimeoutError("Read timed out. (read timeout=1800)")
 
     archive = tmp_path / "image.tar"
-    archive.write_bytes(b"tar")
+    archive.write_bytes(_whole_image_archive())
 
     with pytest.raises(ImageBuildError) as caught:
         DockerEngine(client=_TimingOut()).import_image(archive_path=str(archive))
@@ -272,7 +285,7 @@ def test_import_after_an_ordinary_call_still_gets_the_archive_timeout(
 ) -> None:
     """The destination has the same exposure once it has made any engine call."""
     archive = tmp_path / "image.tar"
-    archive.write_bytes(b"tar")
+    archive.write_bytes(_whole_image_archive())
     engine = DockerEngine()
     engine.image_digest("repo/image:tag")
 
@@ -288,7 +301,7 @@ def test_the_two_clients_stay_distinct_in_either_order(
 ) -> None:
     """Whichever comes first, each path keeps its own client and its own bound."""
     archive = tmp_path / "image.tar"
-    archive.write_bytes(b"tar")
+    archive.write_bytes(_whole_image_archive())
 
     engine = DockerEngine()
     engine.import_image(archive_path=str(archive))  # archive path first

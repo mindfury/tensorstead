@@ -10,6 +10,17 @@
     - "{{ tensorstead_coordinator_store | dirname }}"
     - "{{ tensorstead_coordinator_credentials_dir }}"
 
+- name: Create credential import directory
+  # The only place a `--from-file` credential import may be read from
+  # (CodeGuard CG-03). Root-owned: an operator places a file here on purpose;
+  # the service user can read, not write.
+  ansible.builtin.file:
+    path: "{{ tensorstead_coordinator_credential_import_dir | default('/var/lib/tensorstead/credential-imports') }}"
+    state: directory
+    owner: root
+    group: "{{ tensorstead_service_user }}"
+    mode: '0750'
+
 - name: Configure coordinator environment
   ansible.builtin.template:
     src: coordinator.env.j2

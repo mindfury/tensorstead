@@ -47,6 +47,10 @@ pytestmark = pytest.mark.contract
 _HANDLED_IN_ROUTE: dict[str, str] = {
     "ReplicationError": "routes/replication.py catches it and raises a structured HTTPException",
     "ImageInUseError": "routes/images.py remove_image translates it to 409 image_in_use",
+    "ArchiveRefused": (
+        "container_engine/docker_py.py import_image catches it and raises ImageBuildError, "
+        "which the agent app handles"
+    ),
     "ImageNotPresentError": (
         "routes/images.py remove_image treats it as the already-absent case and returns "
         "200 removed=false"

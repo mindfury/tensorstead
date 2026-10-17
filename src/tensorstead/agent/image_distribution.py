@@ -152,7 +152,11 @@ class ImageDistributionService:
         without a real network fetch.
         """
         try:
-            loaded = self._engine.import_image(archive_path=str(staged))
+            loaded = self._engine.import_image(
+                archive_path=str(staged),
+                expected_id=expected_image_id,
+                allowed_names=frozenset({reference}),
+            )
         except Exception as exc:
             raise ImageDistributionError(
                 f"archive for {reference!r} could not be loaded: {exc}", reference=reference

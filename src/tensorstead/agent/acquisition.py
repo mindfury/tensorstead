@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import stat
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -480,23 +481,66 @@ class ModelAcquisitionService:
         except ValueError:
             return self._rebase_foreign_path(recorded_path)
         safe_dir = self._model_dir(model_id)
-        if legacy_dir.exists() and not safe_dir.exists():
-            safe_dir.parent.mkdir(parents=True, exist_ok=True)
-            os.rename(legacy_dir, safe_dir)
-            replica = self.get_replica(model_id)
-            if replica is not None:
-                self._mark_available(
-                    AcquiredReplica(
-                        model_id=replica.model_id,
-                        resolved_revision=replica.resolved_revision,
-                        local_path=str(safe_dir),
-                        state=replica.state,
-                        verified_at=replica.verified_at,
-                        size_bytes=replica.size_bytes,
-                        content_digest=replica.content_digest,
-                    )
+        # Everything below that mutates the host is gated on the legacy path
+        # being exactly what a legacy store contains (CodeGuard CG-02). The
+        # check above is lexical, so ``<store>/../outside:x`` passed it and the
+        # rename then pulled a directory from outside the store into it, after
+        # which containment accepted the result. Now: no ``.``/``..``/empty
+        # components, a replica this agent actually recorded under that id,
+        # and a walk with O_NOFOLLOW directory handles so neither a symlinked
+        # parent nor a symlinked final component is followed -- and the rename
+        # is done relative to those handles, so the path cannot be swapped
+        # between the check and the move. Anything else is returned unmigrated,
+        # for ``require_model_path`` to refuse.
+        replica = self.get_replica(model_id)
+        if replica is not None and not safe_dir.exists() and self._migrate_legacy(model_id):
+            self._mark_available(
+                AcquiredReplica(
+                    model_id=replica.model_id,
+                    resolved_revision=replica.resolved_revision,
+                    local_path=str(safe_dir),
+                    state=replica.state,
+                    verified_at=replica.verified_at,
+                    size_bytes=replica.size_bytes,
+                    content_digest=replica.content_digest,
                 )
+            )
         return str(safe_dir) if safe_dir.exists() else recorded_path
+
+    def _migrate_legacy(self, model_id: str) -> bool:
+        """Rename ``<store>/<model_id>`` to its safe name without following any link.
+
+        Returns whether it moved. Every component is opened relative to its
+        parent with ``O_NOFOLLOW``, so a component that is a symlink -- to
+        anywhere, including back inside the store -- stops the migration.
+        """
+        parts = PurePosixPath(model_id).parts
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            return False
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            store_fd = os.open(self._store_dir, flags)
+        except OSError:
+            return False
+        fds = [store_fd]
+        try:
+            for part in parts[:-1]:
+                fds.append(os.open(part, flags, dir_fd=fds[-1]))
+            final = os.stat(parts[-1], dir_fd=fds[-1], follow_symlinks=False)
+            if not stat.S_ISDIR(final.st_mode):
+                return False
+            os.rename(
+                parts[-1],
+                self._model_dir(model_id).name,
+                src_dir_fd=fds[-1],
+                dst_dir_fd=store_fd,
+            )
+            return True
+        except OSError:
+            return False
+        finally:
+            for fd in reversed(fds):
+                os.close(fd)
 
     def _rebase_foreign_path(self, recorded_path: str) -> str:
         """Map a path recorded under another store root onto this store.

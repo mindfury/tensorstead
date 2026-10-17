@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import stat
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from tensorstead.domain.errors import CredentialResolutionError, NotFoundError, StillReferencedError
@@ -45,8 +46,40 @@ _OWN_ENV_PREFIX = "TENSORSTEAD_"
 # rather than a hang.
 _MAX_SECRET_FILE_BYTES = 65536
 
+# Where Tensorstead keeps its *own* secrets: the env files and TLS keys under
+# the config directory. An import directory that overlaps one of these, or the
+# credential store itself, would let a caller re-import an operational secret
+# as an external credential -- the boundary CodeGuard CG-03 found missing.
+_OWN_SECRET_DIRS = (Path("/etc/tensorstead"),)
 
-def secret_from(*, secret: str | None, from_env: str | None, from_file: str | None) -> str:
+
+def import_root_refusal(import_root: Path | None, protected: list[Path]) -> str | None:
+    """Why ``import_root`` may not be used for file imports, or ``None`` if it may."""
+    if import_root is None:
+        return (
+            "file imports are disabled: no credential import directory is configured "
+            "(TENSORSTEAD_CREDENTIAL_IMPORT_DIR)"
+        )
+    root = Path(os.path.realpath(import_root))
+    for other in [*protected, *_OWN_SECRET_DIRS]:
+        theirs = Path(os.path.realpath(other))
+        if root == theirs or theirs in root.parents or root in theirs.parents:
+            return (
+                f"the credential import directory {str(root)!r} overlaps {str(theirs)!r}, "
+                "where Tensorstead keeps its own secrets; file imports are disabled until "
+                "it is a separate directory"
+            )
+    return None
+
+
+def secret_from(
+    *,
+    secret: str | None,
+    from_env: str | None,
+    from_file: str | None,
+    import_root: Path | None = None,
+    protected: list[Path] | None = None,
+) -> str:
     """Resolve exactly one accepted secret form into a value.
 
     Shared by both credential services so neither grows its own copy of the
@@ -73,11 +106,42 @@ def secret_from(*, secret: str | None, from_env: str | None, from_file: str | No
     # Type narrowing for mypy: from_env was handled above, so this is
     # the remaining branch. Not a check on untrusted input.
     assert from_file is not None  # noqa: S101
-    return _read_secret_file(from_file)
+    refusal = import_root_refusal(import_root, protected or [])
+    if refusal is not None:
+        raise ValueError(refusal)
+    assert import_root is not None  # noqa: S101 -- import_root_refusal returned None
+    return _read_secret_file(from_file, import_root)
 
 
-def _read_secret_file(path: str) -> str:
-    """Read a credential file with the care its contents deserve.
+def _import_parts(path: str, root: Path) -> list[str]:
+    """``path`` as components below ``root``: a name, or an absolute path inside it.
+
+    Lexical only, on purpose -- nothing here resolves a link. Traversal and
+    empty components are refused; the open below refuses links themselves.
+    """
+    candidate = Path(path)
+    if candidate.is_absolute():
+        try:
+            candidate = candidate.relative_to(root)
+        except ValueError:
+            raise ValueError(
+                f"credential file {path!r} is outside the credential import directory "
+                f"{str(root)!r}; place it there and name it"
+            ) from None
+    parts = list(candidate.parts)
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ValueError(
+            f"credential file {path!r} is not a plain name inside the import directory"
+        )
+    return parts
+
+
+def _read_secret_file(path: str, root: Path) -> str:
+    """Read a credential file from the import directory with the care it deserves.
+
+    Only files inside ``root`` (CodeGuard CG-03). Every component is opened
+    relative to its parent's descriptor with ``O_NOFOLLOW``, so a symlinked
+    parent directory cannot lead out of ``root`` any more than a symlinked file.
 
     ``O_NOFOLLOW`` refuses a symlink atomically at open time rather than
     stat-then-open, which a race could still slip through. ``O_NONBLOCK`` is
@@ -91,10 +155,19 @@ def _read_secret_file(path: str) -> str:
     ``O_NOFOLLOW`` does not cover, and the size cap turns one with no EOF
     (``/dev/zero``) into a refusal instead of an unbounded read.
     """
+    parts = _import_parts(path, root)
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    dirs: list[int] = []
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        dirs.append(os.open(root, dir_flags))
+        for part in parts[:-1]:
+            dirs.append(os.open(part, dir_flags, dir_fd=dirs[-1]))
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirs[-1])
     except OSError as exc:
         raise ValueError(f"could not read credential file {path!r}: {exc}") from exc
+    finally:
+        for d in reversed(dirs):
+            os.close(d)
     try:
         mode = os.fstat(fd).st_mode
         if not stat.S_ISREG(mode):
@@ -116,7 +189,16 @@ def _read_secret_file(path: str) -> str:
 class CredentialService:
     """Set, list, and delete named per-source credential references."""
 
-    def __init__(self, repository: Repository, provider: Any) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        provider: Any,
+        *,
+        import_root: Path | None = None,
+        protected: list[Path] | None = None,
+    ) -> None:
+        self._import_root = import_root
+        self._protected = protected or []
         self._repo = repository
         self._provider = provider
 
@@ -162,7 +244,13 @@ class CredentialService:
         self, *, secret: str | None, from_env: str | None, from_file: str | None
     ) -> str:
         """Resolve the one accepted form into a value (delegates to the shared helper)."""
-        return secret_from(secret=secret, from_env=from_env, from_file=from_file)
+        return secret_from(
+            secret=secret,
+            from_env=from_env,
+            from_file=from_file,
+            import_root=self._import_root,
+            protected=self._protected,
+        )
 
     def _resolve_default_flag(
         self,
@@ -322,9 +410,18 @@ class InferenceCredentialService:
     is no read path. Storage holds a reference.
     """
 
-    def __init__(self, repository: Repository, provider: Any) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        provider: Any,
+        *,
+        import_root: Path | None = None,
+        protected: list[Path] | None = None,
+    ) -> None:
         self._repo = repository
         self._provider = provider
+        self._import_root = import_root
+        self._protected = protected or []
 
     def set(
         self,
@@ -335,7 +432,13 @@ class InferenceCredentialService:
         from_file: str | None = None,
     ) -> dict[str, Any]:
         """Store an inference credential under ``name``."""
-        secret = secret_from(secret=value, from_env=from_env, from_file=from_file)
+        secret = secret_from(
+            secret=value,
+            from_env=from_env,
+            from_file=from_file,
+            import_root=self._import_root,
+            protected=self._protected,
+        )
         ref = self._provider.store("inference", name, secret)
         self._repo.save_inference_credential(
             InferenceCredential(name=name, secret_ref=ref, set_at=datetime.now().astimezone())

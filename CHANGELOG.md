@@ -7,6 +7,37 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Security
+Fixes from an independent Project CodeGuard review (IDs CG-xx refer to it).
+- **CG-01: a bound inference credential reaches every start.** An initial
+  `deployment start` resolved no credential, so the agent fell back to the
+  node's default key or none; only `restart` honoured the binding. Both now go
+  through one path that resolves the binding *before* any image or node call.
+  A missing, unreadable or empty binding refuses the start
+  (`credential_resolution_failed`) with every node untouched.
+- **CG-02: legacy model-path migration can't move anything from outside the
+  store.** The agent renamed a colon-bearing legacy path after a lexical check,
+  so `<store>/../outside:x` was moved into the store and then accepted.
+  Migration now requires a replica this agent recorded under that id. It walks
+  the path with `O_NOFOLLOW` directory handles and renames relative to them,
+  so traversal, symlinked parents and symlinked final components are never
+  followed or moved.
+- **CG-03: credential file imports are confined to an import directory.**
+  `--from-file` read any coordinator-readable file, so an authenticated caller
+  could import Tensorstead's own operational secrets as a credential. Now only
+  files inside `TENSORSTEAD_CREDENTIAL_IMPORT_DIR` are read, opened
+  descriptor-relative with no symlinks anywhere on the path. The directory must
+  not overlap the credential store, the coordinator state directory or
+  `/etc/tensorstead`, and `--from-file` is refused when it is unset. The
+  coordinator role creates `/var/lib/tensorstead/credential-imports`.
+- **CG-04: image archives are authorized as a whole before loading.**
+  `import_image` loaded an archive and checked only the first image, so extra
+  images and tags (from a compromised peer, say) survived verification. The
+  archive's `index.json`/`manifest.json` must now declare exactly one image,
+  identified as expected, carrying no name the caller didn't allow, or nothing
+  is loaded. A load that differs from its declaration removes only what it
+  introduced.
+
 ## [1.6.0] - 2026-10-17
 
 ### Added
