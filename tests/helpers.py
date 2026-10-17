@@ -107,6 +107,9 @@ class FakeNodeClient:
         # Every node-touching call, in order, so a test can assert that a
         # refusal happened before any of them.
         self.node_calls: list[str] = []
+        # Which nodes stop / remove were driven on, in order.
+        self.stops: list[str] = []
+        self.removes: list[str] = []
 
     def agent_for(self, node_id: str) -> FakeNodeAgent:
         """The agent standing in for ``node_id`` (the default unless assigned)."""
@@ -231,6 +234,12 @@ class FakeNodeClient:
         agent.image_pulls.append(reference)
         return {"digest": image_id}
 
+    def remove_image(self, node: Node, *, reference: str) -> dict[str, Any]:
+        """Like the agent: removes what it holds, ``removed: false`` for what it doesn't."""
+        held = self._for(node).images
+        digest = held.pop(reference, None)
+        return {"reference": reference, "removed": digest is not None, "digest": digest}
+
     def distribute_image(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         """Pull a produced image from a peer and return the identifier that arrived.
 
@@ -279,7 +288,14 @@ class FakeNodeClient:
                 message=str(exc),
                 node_id=node.id,
             ) from exc
-        return {"status": "created", "deployment_id": payload["deployment_id"]}
+        # Like the real agent: report the digest the image resolved to, which
+        # the coordinator records per revision (CodeGuard CG-10).
+        reference = str(payload.get("image_reference", ""))
+        return {
+            "status": "created",
+            "deployment_id": payload["deployment_id"],
+            "image_digest": "sha256:" + hashlib.sha256(reference.encode()).hexdigest(),
+        }
 
     def get_observed(self, node: Node, deployment_id: str) -> dict[str, Any]:
         try:
@@ -302,6 +318,7 @@ class FakeNodeClient:
             ) from exc
 
     def stop_deployment(self, node: Node, deployment_id: str) -> dict[str, Any]:
+        self.stops.append(node.id)
         try:
             return self._for(node).stop_deployment(deployment_id)
         except (ConnectionError, OSError) as exc:
@@ -322,6 +339,7 @@ class FakeNodeClient:
             ) from exc
 
     def remove_deployment(self, node: Node, deployment_id: str) -> dict[str, Any]:
+        self.removes.append(node.id)
         try:
             return self._for(node).remove_deployment(deployment_id)
         except (ConnectionError, OSError) as exc:

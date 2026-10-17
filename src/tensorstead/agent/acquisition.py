@@ -274,10 +274,17 @@ class ModelAcquisitionService:
         # the Internet again -- 165 GiB twice for GLM-5.3 on 2026-10-16. This is
         # the same digest the destination recomputes over the received tree.
         if content_digest is None:
-            from tensorstead.agent.replication import directory_digest
+            from tensorstead.agent.replication import UnsupportedTreeEntry, directory_digest
 
             _report(0.95, "digesting")
-            content_digest = directory_digest(staging_dir)
+            try:
+                content_digest = directory_digest(staging_dir)
+            except UnsupportedTreeEntry:
+                # A tree with a link in it can't be given an unambiguous digest.
+                # The download itself is fine, so it is kept; it simply carries
+                # no digest, and a later replication from it is refused with
+                # that reason rather than verified against something weaker.
+                content_digest = None
         replica = self.promote(
             model_id,
             staging_dir,

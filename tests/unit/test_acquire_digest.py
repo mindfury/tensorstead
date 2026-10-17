@@ -65,7 +65,7 @@ def test_a_digest_is_computed_when_the_source_reports_none(tmp_path: Path) -> No
     service, replica = _acquire(tmp_path, None)
     expected = directory_digest(service.local_path("test:org/model"))
     assert replica.content_digest == expected  # type: ignore[attr-defined]
-    assert expected.startswith("sha256:")
+    assert expected.startswith("tsdir2-sha256:")
 
 
 def test_a_digest_the_source_reports_is_kept(tmp_path: Path) -> None:

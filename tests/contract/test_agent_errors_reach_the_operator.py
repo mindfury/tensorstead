@@ -51,6 +51,10 @@ _HANDLED_IN_ROUTE: dict[str, str] = {
         "container_engine/docker_py.py import_image catches it and raises ImageBuildError, "
         "which the agent app handles"
     ),
+    "UnsupportedTreeEntry": (
+        "agent/acquisition.py records no digest for such a tree; replication.py wraps it "
+        "in ReplicationError"
+    ),
     "ImageNotPresentError": (
         "routes/images.py remove_image treats it as the already-absent case and returns "
         "200 removed=false"

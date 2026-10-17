@@ -222,13 +222,23 @@ def _wire_services(
     app.state.models_service = ModelService(
         repository, node_client, credentials=app.state.credentials_service
     )
-    app.state.deployments_service = DeploymentService(repository, adapters, node_client)
+    from tensorstead.service.deployment_locks import DeploymentLocks
+
+    # One lock registry for definition changes and lifecycle operations.
+    app.state.deployment_locks = DeploymentLocks()
+    app.state.deployments_service = DeploymentService(
+        repository, adapters, node_client, deployment_locks=app.state.deployment_locks
+    )
     from tensorstead.service.image_staging import ImageStager
 
     # One stager for starts and explicit pulls, so both serialize per reference.
     app.state.image_stager = ImageStager(repository, node_client)
     app.state.lifecycle_service = LifecycleService(
-        repository, node_client, adapters, image_stager=app.state.image_stager
+        repository,
+        node_client,
+        adapters,
+        image_stager=app.state.image_stager,
+        deployment_locks=app.state.deployment_locks,
     )
     app.state.operations_service = OperationService(repository)
 

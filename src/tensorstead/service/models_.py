@@ -857,9 +857,33 @@ class ModelService:
         a recorded finding and left standing here for another six weeks.
         """
         referrers: list[str] = []
+        # The references this node's inventory holds under this digest, for the
+        # conservative case below.
+        held_as = {
+            record.reference
+            for record in self._repo.list_images()
+            if record.node_id == node_id and record.digest == digest
+        }
         for deployment in self._repo.list_deployments():
             for revision in self._repo.list_revisions(deployment.id):
-                if revision.image_digest == digest and node_id in revision.participating_nodes:
+                if node_id not in revision.participating_nodes:
+                    continue
+                ran = self._repo.revision_image_digests(deployment.id, revision.revision, node_id)
+                if (
+                    revision.image_digest == digest
+                    or digest in ran
+                    # No digest evidence for this revision here at all -- one
+                    # created before materializations were recorded, or never
+                    # started -- but it names this image's reference: protect
+                    # it rather than guess (CodeGuard CG-10). The comparison
+                    # used to be against ``image_digest`` alone, which the
+                    # service always left empty, so nothing was ever protected.
+                    or (
+                        not revision.image_digest
+                        and not ran
+                        and revision.image_reference in held_as
+                    )
+                ):
                     referrers.append(deployment.name)
                     break  # one match per deployment is enough to refuse
         return referrers

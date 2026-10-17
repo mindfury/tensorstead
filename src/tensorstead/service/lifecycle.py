@@ -52,6 +52,7 @@ from tensorstead.domain.served_name import declared_served_name
 from tensorstead.ports.node_client import AgentCallError
 from tensorstead.ports.repository import Repository
 from tensorstead.ports.runtime_adapter import NodePosition
+from tensorstead.service.deployment_locks import DeploymentLocks
 from tensorstead.service.image_staging import ImageStager
 from tensorstead.service.nodes import refuse_if_node_reserved
 
@@ -94,6 +95,7 @@ class LifecycleService:
         node_client: Any,
         runtime_adapters: dict[str, Any] | None = None,
         image_stager: Any | None = None,
+        deployment_locks: DeploymentLocks | None = None,
     ) -> None:
         self._repo = repository
         self._client = node_client
@@ -104,16 +106,13 @@ class LifecycleService:
         # behaves exactly as it did: no adapters means no staging, which is the
         # concurrent dispatch this service has always done.
         self._adapters = runtime_adapters or {}
-        # Per-deployment lock for operation serialization.
-        self._locks: dict[str, threading.Lock] = {}
-        self._locks_guard = threading.Lock()
+        # Per-deployment lock, shared with the definition service so a modify
+        # cannot interleave with a lifecycle operation (CodeGuard CG-08).
+        self._deployment_locks = deployment_locks or DeploymentLocks()
 
-    def _lock_for(self, deployment_id: str) -> threading.Lock:
-        """Return the per-deployment lock, creating it on first use."""
-        with self._locks_guard:
-            if deployment_id not in self._locks:
-                self._locks[deployment_id] = threading.Lock()
-            return self._locks[deployment_id]
+    def _lock_for(self, deployment_id: str) -> threading.RLock:
+        """Return the per-deployment lock, shared with the definition service."""
+        return self._deployment_locks.for_deployment(deployment_id)
 
     # ----------------------------------------------------------------- start
     def start(self, deployment_id: str) -> Deployment:
@@ -158,7 +157,14 @@ class LifecycleService:
                 desired_state="running",
                 running_revision=deployment.current_revision,
             )
-            self._repo.save_deployment(updated)
+            # Lifecycle columns only: a whole-row save from this snapshot would
+            # write back the current_revision it read before any concurrent
+            # modify, undoing it (CodeGuard CG-08).
+            self._repo.update_deployment_state(
+                updated.id,
+                desired_state=updated.desired_state,
+                running_revision=updated.running_revision,
+            )
             return updated
 
     def start_advisories(self) -> list[str]:
@@ -191,10 +197,19 @@ class LifecycleService:
                     f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
                 )
 
-            self._drive_nodes(revision, "stop", self._stop_on)
+            self._drive_nodes(
+                revision, "stop", self._stop_on, node_ids=self._materialized_nodes(deployment)
+            )
 
             updated = replace(deployment, desired_state="stopped")
-            self._repo.save_deployment(updated)
+            # Lifecycle columns only: a whole-row save from this snapshot would
+            # write back the current_revision it read before any concurrent
+            # modify, undoing it (CodeGuard CG-08).
+            self._repo.update_deployment_state(
+                updated.id,
+                desired_state=updated.desired_state,
+                running_revision=updated.running_revision,
+            )
             return updated
 
     # --------------------------------------------------------------- restart
@@ -222,7 +237,14 @@ class LifecycleService:
                 desired_state="running",
                 running_revision=deployment.current_revision,
             )
-            self._repo.save_deployment(updated)
+            # Lifecycle columns only: a whole-row save from this snapshot would
+            # write back the current_revision it read before any concurrent
+            # modify, undoing it (CodeGuard CG-08).
+            self._repo.update_deployment_state(
+                updated.id,
+                desired_state=updated.desired_state,
+                running_revision=updated.running_revision,
+            )
             return updated
 
     # ---------------------------------------------------------------- remove
@@ -242,7 +264,13 @@ class LifecycleService:
                 )
 
             per_node: dict[str, dict[str, Any]] = {}
-            for node_id in revision.participating_nodes:
+            # Every node any retained revision placed this deployment on, not
+            # only the current revision's: a placement changed while running
+            # leaves the old nodes' containers and units behind, and removing
+            # the record would orphan them (CodeGuard CG-09). An agent asked to
+            # remove what it does not hold answers success, so this costs
+            # nothing on a node that never ran it.
+            for node_id in self._every_placement(deployment.id):
                 node = self._repo.get_node(node_id)
                 if node is None:
                     raise NotFoundError(f"no node with id {node_id!r}")
@@ -280,6 +308,8 @@ class LifecycleService:
         revision: Any,
         action: str,
         call: Callable[..., None],
+        *,
+        node_ids: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Run ``call`` on every participating node and judge the whole.
 
@@ -299,7 +329,7 @@ class LifecycleService:
         failures: list[tuple[Node, AgentCallError]] = []
 
         nodes: list[Node] = []
-        for node_id in revision.participating_nodes:
+        for node_id in node_ids if node_ids is not None else revision.participating_nodes:
             node = self._repo.get_node(node_id)
             if node is None:
                 raise NotFoundError(f"no node with id {node_id!r}")
@@ -654,6 +684,12 @@ class LifecycleService:
                 pulled_at=datetime.now().astimezone(),
             )
         )
+        # And what *this revision* ran, which the inventory row cannot say:
+        # the deletion guard needs it, and it must outlive the tag moving
+        # (CodeGuard CG-10).
+        self._repo.record_revision_image(
+            revision.deployment_id, revision.revision, node.id, str(digest)
+        )
 
     def _stop_on(
         self,
@@ -696,6 +732,35 @@ class LifecycleService:
             revision, "start", functools.partial(self._create_on, credential=credential)
         )
 
+    def _materialized_nodes(self, deployment: Deployment) -> list[str]:
+        """Where this deployment may be running: the running revision's nodes, then the current's.
+
+        Stop used to drive only the current revision's nodes. After a
+        placement change while running -- start on A, modify to B -- that
+        stopped B, left A serving, and recorded ``stopped`` (CodeGuard CG-09).
+        The running revision is the record of what was actually materialized,
+        so its nodes come first; the current revision's are added because a
+        partial or interrupted start may have reached them.
+        """
+        ordered: list[str] = []
+        for number in (deployment.running_revision, deployment.current_revision):
+            if number is None:
+                continue
+            revision = self._repo.get_revision(deployment.id, number)
+            for node_id in revision.participating_nodes if revision is not None else ():
+                if node_id not in ordered:
+                    ordered.append(node_id)
+        return ordered
+
+    def _every_placement(self, deployment_id: str) -> list[str]:
+        """Every node any retained revision of this deployment named, in order."""
+        ordered: list[str] = []
+        for revision in self._repo.list_revisions(deployment_id):
+            for node_id in revision.participating_nodes:
+                if node_id not in ordered:
+                    ordered.append(node_id)
+        return ordered
+
     def _stage_image(self, revision: Any) -> None:
         """Fetch a group's image from the registry once and copy it to the other ranks.
 
@@ -713,7 +778,9 @@ class LifecycleService:
             raise NotFoundError(
                 f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
             )
-        self._drive_nodes(revision, "stop", self._stop_on)
+        self._drive_nodes(
+            revision, "stop", self._stop_on, node_ids=self._materialized_nodes(deployment)
+        )
 
     def _refuse_served_name_conflict(
         self, deployment: Deployment, runtime_config: dict[str, Any] | None
