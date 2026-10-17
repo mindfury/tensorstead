@@ -321,6 +321,16 @@ class NodeHTTPClient:
             node, "POST", "/agent/v1/images:build", json=payload, timeout=_BUILD_TIMEOUT_SECONDS
         )
 
+    def pull_image(self, node: Node, *, reference: str) -> dict[str, Any]:
+        """Have ``node`` pull ``reference`` from its registry."""
+        return self._call(
+            node,
+            "POST",
+            "/agent/v1/images:pull",
+            json={"reference": reference},
+            timeout=_DISTRIBUTE_TIMEOUT_SECONDS,
+        )
+
     def distribute_image(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         """Have ``node`` pull an image from a peer."""
         return self._call(

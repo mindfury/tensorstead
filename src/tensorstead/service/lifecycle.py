@@ -52,6 +52,7 @@ from tensorstead.domain.served_name import declared_served_name
 from tensorstead.ports.node_client import AgentCallError
 from tensorstead.ports.repository import Repository
 from tensorstead.ports.runtime_adapter import NodePosition
+from tensorstead.service.image_staging import ImageStager
 from tensorstead.service.nodes import refuse_if_node_reserved
 
 # What a start operation has and has not established.
@@ -92,9 +93,12 @@ class LifecycleService:
         repository: Repository,
         node_client: Any,
         runtime_adapters: dict[str, Any] | None = None,
+        image_stager: Any | None = None,
     ) -> None:
         self._repo = repository
         self._client = node_client
+        # Shared with the image-pull route so both serialize on one reference.
+        self._stager = image_stager or ImageStager(repository, node_client)
         # Only to ask whether a runtime's ranks must be started in order.
         # Optional so every existing construction keeps working and
         # behaves exactly as it did: no adapters means no staging, which is the
@@ -139,6 +143,7 @@ class LifecycleService:
             # outcomes. Raises before the save below if any node
             # failed, so desired state is never recorded as changed on a
             # half-applied operation.
+            self._stage_image(revision)
             self._drive_nodes(revision, "start", self._create_on)
 
             # Records the revision the nodes were last successfully *asked* to
@@ -676,9 +681,20 @@ class LifecycleService:
         # failures. Uncaught deliberately: see
         # _resolve_inference_credential.
         credential = self._resolve_inference_credential(revision.deployment_id)
+        self._stage_image(revision)
         self._drive_nodes(
             revision, "start", functools.partial(self._create_on, credential=credential)
         )
+
+    def _stage_image(self, revision: Any) -> None:
+        """Fetch a group's image from the registry once and copy it to the other ranks.
+
+        Before any rank is started. Left to the agents, every node without the
+        image pulled the same bytes from the registry. Single-node starts are
+        unchanged: one node, one pull, by the agent as before.
+        """
+        if len(revision.participating_nodes) > 1:
+            self._stager.stage(revision.image_reference, list(revision.participating_nodes))
 
     def _stop_on_nodes(self, deployment: Deployment) -> None:
         """Drive the agent to stop the deployment on each participating node."""

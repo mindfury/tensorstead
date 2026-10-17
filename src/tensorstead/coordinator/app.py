@@ -57,6 +57,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "concurrent_modification": 409,
     "acquisition_in_progress": 409,
     "replication_failed": 409,
+    "image_staging_failed": 502,
 }
 
 
@@ -219,7 +220,13 @@ def _wire_services(
         repository, node_client, credentials=app.state.credentials_service
     )
     app.state.deployments_service = DeploymentService(repository, adapters, node_client)
-    app.state.lifecycle_service = LifecycleService(repository, node_client, adapters)
+    from tensorstead.service.image_staging import ImageStager
+
+    # One stager for starts and explicit pulls, so both serialize per reference.
+    app.state.image_stager = ImageStager(repository, node_client)
+    app.state.lifecycle_service = LifecycleService(
+        repository, node_client, adapters, image_stager=app.state.image_stager
+    )
     app.state.operations_service = OperationService(repository)
 
     from tensorstead.service.approvals import ApprovalService

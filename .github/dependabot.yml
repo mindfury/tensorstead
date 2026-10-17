@@ -23,4 +23,10 @@ updates:
     groups:
       python-minor-and-patch:
         update-types: [minor, patch]
+      # Security updates arrive as one PR too. The repository's "grouped
+      # security updates" setting does nothing without a group that applies
+      # to them; without it 2026-10-17 brought five separate PRs.
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
     open-pull-requests-limit: 5

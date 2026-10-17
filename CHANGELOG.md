@@ -33,6 +33,27 @@ is versioned separately (`stead status` reports both).
   silently downloaded the whole model again: 165 GiB twice for GLM-5.3. The
   agent now computes the digest itself after verifying a download.
 
+- **A multi-node start pulls its image from the registry once.** Each rank's
+  agent used to resolve the image alone, so every node without it pulled the
+  same bytes (9.7 GB per node for the GLM-5.3 runtime). The coordinator now
+  stages the image first. A node that already holds it is the source;
+  otherwise the first node pulls it, and the rest copy it agent-to-agent,
+  verified by id. A failed copy fails the start (`image_staging_failed`)
+  naming the node, rather than letting it pull. Unreachable nodes are left to
+  the start, which reports them as before.
+- **Digest-pinned images resolve after a peer copy.** `docker save`/`load`
+  drops the `name@sha256:` reference, so a copied image is held only by its id
+  and a pinned reference missed it and pulled again (measured on the Sparks).
+  When the name does not resolve, the agent now accepts a local image whose
+  id is exactly the pinned digest. That match is exact on Docker's containerd
+  store (where the id is the manifest digest) and never occurs on the classic
+  store.
+
+### Added
+- `stead image pull REF --node A --node B` / `POST /v1/images:pull` / MCP
+  `image_pull`: stage an image before a planned start, with the same
+  pull-once-and-copy behaviour. Recorded as an `image_acquire` operation.
+
 ### Changed
 - **Failed replication is refused, not papered over.** When a node already
   holds the model and copying it to another node fails, the acquire fails with

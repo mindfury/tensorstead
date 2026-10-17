@@ -133,6 +133,13 @@ class RuntimeInfo(ClientContractModel):
     suggested_images: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ImagePullRequest(ClientContractModel):
+    """Put a registry image on nodes: pulled once, copied to the rest."""
+
+    reference: str
+    nodes: list[str]
+
+
 class ModelAcquireRequest(ClientContractModel):
     source_id: str
     source_model_id: str

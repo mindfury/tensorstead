@@ -409,6 +409,27 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         return client.request("POST", "/v1/images:build", json=payload)
 
     @server.tool()
+    def image_pull(
+        reference: Annotated[
+            str, Field(description="Image reference, ideally pinned: repo@sha256:...")
+        ],
+        nodes: Annotated[list[str], Field(description="Node ids from node_list.")],
+    ) -> ApiResult:
+        """Put a registry image on nodes; returns an ``operation_id`` to poll.
+
+        Pulled from the registry **once**: a node that already holds the image
+        is the source, otherwise the first node pulls it, and every other node
+        copies it from that node, verified by id. A failed copy fails the
+        operation naming the node; nothing pulls it from the registry again.
+        Stage a runtime image this way before a planned start so the download
+        is not part of the downtime. A multi-node ``deployment_start`` stages
+        its image the same way on its own.
+        """
+        return client.request(
+            "POST", "/v1/images:pull", json={"reference": reference, "nodes": nodes}
+        )
+
+    @server.tool()
     def image_import(
         node_id: Annotated[str, Field(description="Node id from node_list.")],
         reference: Annotated[str, Field(description="Tag for the imported image.")],

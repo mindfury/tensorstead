@@ -391,3 +391,11 @@ class ImageRecord:
     def is_registry_digest(self) -> bool:
         """False for locally produced images, which have no registry digest."""
         return self.origin is ImageOrigin.PULLED
+
+
+def pinned_digest(reference: str) -> str | None:
+    """The ``sha256:`` digest a ``name@sha256:…`` reference pins, or ``None``."""
+    _, sep, digest = reference.rpartition("@")
+    if sep and digest.startswith("sha256:") and len(digest) == len("sha256:") + 64:
+        return digest
+    return None
