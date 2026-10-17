@@ -62,7 +62,11 @@ class _RealAdapter:
 
     def contract_version_header(self) -> str | None:
         response = self._client.get("/agent/v1/info")
-        return cast(str | None, response.headers.get(AGENT_VERSION_HEADER))
+        # Narrowed rather than cast: httpx2 2.12 types this as ``str | None``,
+        # earlier releases did not, and a cast is redundant under one and needed
+        # under the other.
+        value = response.headers.get(AGENT_VERSION_HEADER)
+        return None if value is None else str(value)
 
 
 _AGENTS = [
