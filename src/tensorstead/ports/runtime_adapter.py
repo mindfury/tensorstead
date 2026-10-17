@@ -228,6 +228,12 @@ class ContainerRequirements:
     # else besides; a deployment record that cannot describe what its container
     # may do has stopped being a true account of what is running.
     capabilities: list[str] = field(default_factory=list)
+    # Named syscall groups to allow on top of Docker's default seccomp profile,
+    # e.g. ``["io_uring"]``. Same rule as ``devices``: adapters declare,
+    # configuration may not -- and an adapter declares one only for a field an
+    # approval has authorized. A name, not a profile, so the record says which
+    # opening was made and the agent alone decides what it means in syscalls.
+    seccomp_allow: list[str] = field(default_factory=list)
     # Values in this runtime's configuration that name *additional models* the
     # container will read -- a speculative-decoding drafter being the case that
     # forced this. Recognising which config key means "a model" is

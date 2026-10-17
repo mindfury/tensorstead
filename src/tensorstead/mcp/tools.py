@@ -446,9 +446,10 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         how authorization is lost -- not by anyone noticing, but by the key
         ceasing to fit.
 
-        Only options classified ``loads-code`` can be approved. Every other
-        refusal says the thing itself is wrong rather than unauthorized, and no
-        review repairs that.
+        Only options classified ``loads-code`` (``trust_remote_code`` and the
+        plugin options) or ``relaxes-isolation`` (``allow_io_uring``) can be
+        approved. Every other refusal says the thing itself is wrong rather than
+        unauthorized, and no review repairs that.
 
         Starts nothing and changes no deployment. Create the approval, then
         create or modify the deployment that needs it.

@@ -273,6 +273,21 @@ class VLLMConfig(BaseModel):
     # Many recent architectures -- including the ones that carry MTP heads --
     # will not load without this.
     trust_remote_code: bool | None = None
+    # Let the runtime use io_uring, which Docker's default seccomp profile
+    # denies. Never reaches vLLM's argv: the adapter turns it into a container
+    # requirement (``seccomp_allow``) that adds the three io_uring syscalls to
+    # Docker's default profile and changes nothing else.
+    #
+    # Exists for NVIDIA's dual-Spark GLM-5.3 recipe. Its ``--load-format b12x``
+    # checkpoint loader reads through io_uring, and the recipe gets that by
+    # running the container ``--privileged`` -- every device, no seccomp, no
+    # AppArmor. This product refuses privileged containers, so without a
+    # narrower opening the published launch died loading its weights with
+    # "io_uring bounce initialization failed: Operation not permitted".
+    #
+    # Classified ``relaxes-isolation``: refused unless a reviewed approval names
+    # this exact model revision and image digest, like ``trust_remote_code``.
+    allow_io_uring: bool | None = None
     seed: int | None = None
     # vLLM logs each request by default, and a request contains a prompt.
     # Tensorstead does not read those logs into its records, but an operator
@@ -377,6 +392,16 @@ class VLLMConfig(BaseModel):
             )
             if not authorized:
                 raise ValueError(f"trust_remote_code may not be set to true: {reason}")
+        return value
+
+    @field_validator("allow_io_uring")
+    @classmethod
+    def _check_allow_io_uring(cls, value: bool | None, info: ValidationInfo) -> bool | None:
+        """Refused without a reviewed approval, through the same gate as code loading."""
+        if value and not already_validated(info):
+            authorized, reason = authorize("allow_io_uring", approved=approved_from_context(info))
+            if not authorized:
+                raise ValueError(f"allow_io_uring may not be set to true: {reason}")
         return value
 
     @model_validator(mode="after")
@@ -726,6 +751,9 @@ class VLLMAdapter:
             ipc_mode=overridden.get("ipc_mode"),
             extra_ports={str(k): int(v) for k, v in (overridden.get("extra_ports") or {}).items()},
             capabilities=list(capabilities),
+            # Approved by the time it gets here: the field validator refused it
+            # otherwise, on the coordinator and again on the agent.
+            seccomp_allow=["io_uring"] if validated.allow_io_uring else [],
             # The adapter's requirement first, the operator's last: an explicit
             # host_config value still wins, because an operator tuning a limit
             # for their own estate should not be silently overruled by a default

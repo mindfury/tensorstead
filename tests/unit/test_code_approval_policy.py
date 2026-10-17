@@ -25,11 +25,14 @@ from tensorstead.adapters.runtimes.option_policy import (
     POLICY_VERSION,
     PRODUCT_OWNED,
     REDIRECTS_WHAT_IS_SERVED,
+    RELAXES_ISOLATION,
     authorize,
     is_approvable,
 )
 from tensorstead.domain.approvals import (
-    APPROVABLE_EFFECT,
+    APPROVABLE_EFFECTS as DOMAIN_APPROVABLE_EFFECTS,
+)
+from tensorstead.domain.approvals import (
     CodeExecutionApproval,
     fingerprint,
     normalize_option,
@@ -63,10 +66,10 @@ def _approval(**overrides: object) -> CodeExecutionApproval:
 # ------------------------------------------------------------- the boundary
 
 
-def test_only_loads_code_is_approvable() -> None:
-    """One class, and the domain and the policy must name the same one."""
-    assert {LOADS_CODE} == APPROVABLE_EFFECTS
-    assert APPROVABLE_EFFECT == LOADS_CODE
+def test_only_authority_refusals_are_approvable() -> None:
+    """Two classes, both refused for insufficient authority; domain and policy agree."""
+    assert {LOADS_CODE, RELAXES_ISOLATION} == APPROVABLE_EFFECTS
+    assert DOMAIN_APPROVABLE_EFFECTS == APPROVABLE_EFFECTS
 
 
 @pytest.mark.parametrize(
