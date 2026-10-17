@@ -2227,6 +2227,8 @@ def _report_error(response: httpx.Response) -> None:
     if code == "authorization_refused":
         raise typer.Exit(EXIT_AUTH_REFUSED)
     if code in (
+        "invalid_request",
+        "invalid_credential_source",
         "invalid_deployment",
         "runtime_not_distributed",
         "endpoint_conflict",

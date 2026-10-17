@@ -245,7 +245,10 @@ def test_set_requires_exactly_one_of_the_three_forms(service: CredentialService)
 def test_set_from_missing_env_is_reported(service: CredentialService) -> None:
     with pytest.raises(ValueError) as exc_info:
         service.set("huggingface", "personal", from_env="DEFINITELY_UNSET_TEST_VAR")
-    assert "DEFINITELY_UNSET_TEST_VAR" in str(exc_info.value)
+    # Reported, but without echoing the name: a secret mistakenly pasted into
+    # from_env would otherwise come straight back (CodeGuard CG-12).
+    assert "from_env is not set" in str(exc_info.value)
+    assert "DEFINITELY_UNSET_TEST_VAR" not in str(exc_info.value)
 
 
 def test_set_from_env_refuses_tensorstead_own_variables(

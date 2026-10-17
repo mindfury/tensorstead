@@ -54,7 +54,7 @@ def test_coordinator_serve_passes_store_to_app_builder(
         captured["store"] = store
         return sentinel_app
 
-    def fake_uvicorn_run(app: object, *, host: str, port: int) -> None:
+    def fake_uvicorn_run(app: object, *, host: str, port: int, **_options: object) -> None:
         captured.update(app=app, host=host, port=port)
 
     monkeypatch.setattr(

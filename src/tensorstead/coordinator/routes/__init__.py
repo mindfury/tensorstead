@@ -19,6 +19,9 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from tensorstead.contracts.api import (
+    BuildSpecSetRequest,
+    CodeApprovalCreateRequest,
+    DeploymentCreateFromExportRequest,
     DeploymentCreateRequest,
     DeploymentDeclared,
     DeploymentModifyRequest,
@@ -29,7 +32,11 @@ from tensorstead.contracts.api import (
     DeploymentResponse,
     DeploymentRuntimeResponse,
     DeploymentStatusResponse,
+    ImageArchiveImportRequest,
+    ImageBuildRequest,
     ImagePullRequest,
+    InferenceCredentialBindRequest,
+    InferenceCredentialSetRequest,
     ModelAcquireRequest,
     ModelReplica,
     ModelResponse,
@@ -64,7 +71,9 @@ def _require_auth(
     configuration gates every route. ``request.app.state.auth`` is a
     ``CoordinatorAuth`` (coordinator/app.py).
     """
-    request.app.state.auth.require_auth(credentials)
+    request.app.state.auth.require_auth(
+        credentials, authorization_headers=len(request.headers.getlist("authorization"))
+    )
 
 
 require_auth_dep = _require_auth
@@ -170,7 +179,7 @@ def register_node(payload: NodeRegisterRequest, request: Request) -> NodeRegiste
 # ------------------------------------------------- inference credentials
 @router.put("/inference-credentials/{name}", dependencies=[Depends(require_auth_dep)])
 def set_inference_credential(
-    name: str, payload: dict[str, Any], request: Request
+    name: str, payload: InferenceCredentialSetRequest, request: Request
 ) -> dict[str, Any]:
     """Store a named inference credential.
 
@@ -181,9 +190,9 @@ def set_inference_credential(
     service = request.app.state.inference_credentials
     return service.set(  # type: ignore[no-any-return]
         name,
-        value=payload.get("value"),
-        from_env=payload.get("from_env"),
-        from_file=payload.get("from_file"),
+        value=payload.value,
+        from_env=payload.from_env,
+        from_file=payload.from_file,
     )
 
 
@@ -204,7 +213,7 @@ def delete_inference_credential(name: str, request: Request) -> dict[str, Any]:
     dependencies=[Depends(require_auth_dep)],
 )
 def bind_inference_credential(
-    deployment_id: str, payload: dict[str, Any], request: Request
+    deployment_id: str, payload: InferenceCredentialBindRequest, request: Request
 ) -> dict[str, Any]:
     """Bind a credential to a deployment, or clear it with a null name.
 
@@ -214,7 +223,7 @@ def bind_inference_credential(
     effect, and is never performed implicitly.
     """
     service = request.app.state.inference_credentials
-    return service.bind(deployment_id, payload.get("name"))  # type: ignore[no-any-return]
+    return service.bind(deployment_id, payload.name)  # type: ignore[no-any-return]
 
 
 # --------------------------------------------- code-execution approvals
@@ -227,18 +236,18 @@ def bind_inference_credential(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_auth_dep)],
 )
-def create_code_approval(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+def create_code_approval(payload: CodeApprovalCreateRequest, request: Request) -> dict[str, Any]:
     """Approve one code-loading option for one exact tuple. Starts nothing."""
     service = request.app.state.code_approvals
     approval = service.create(
-        option=str(payload.get("option", "")),
-        runtime_type=str(payload.get("runtime_type", "")),
-        model_source_id=str(payload.get("model_source_id", "")),
-        source_model_id=str(payload.get("source_model_id", "")),
-        model_revision=str(payload.get("model_revision", "")),
-        image_digest=str(payload.get("image_digest", "")),
-        reason=str(payload.get("reason", "")),
-        approved_by=str(payload.get("approved_by", "")),
+        option=payload.option,
+        runtime_type=payload.runtime_type,
+        model_source_id=payload.model_source_id,
+        source_model_id=payload.source_model_id,
+        model_revision=payload.model_revision,
+        image_digest=payload.image_digest,
+        reason=payload.reason,
+        approved_by=payload.approved_by,
     )
     return _approval_json(approval)
 
@@ -275,14 +284,14 @@ def _approval_json(approval: Any) -> dict[str, Any]:
 
 # ------------------------------------------------ managed runtime images
 @router.put("/buildspecs/{name}", dependencies=[Depends(require_auth_dep)])
-def set_build_spec(name: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
+def set_build_spec(name: str, payload: BuildSpecSetRequest, request: Request) -> dict[str, Any]:
     """Record a build spec. Executes nothing."""
     service = request.app.state.image_builds
     return service.record_spec(  # type: ignore[no-any-return]
         name,
-        base_image=str(payload.get("base_image", "")),
-        steps=list(payload.get("steps", [])),
-        entrypoint=list(payload.get("entrypoint", []) or []),
+        base_image=payload.base_image,
+        steps=list(payload.steps),
+        entrypoint=list(payload.entrypoint),
     )
 
 
@@ -304,7 +313,7 @@ def delete_build_spec(name: str, request: Request) -> dict[str, Any]:
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_auth_dep)],
 )
-async def build_image(payload: dict[str, Any], request: Request) -> OperationAcceptedResponse:
+async def build_image(payload: ImageBuildRequest, request: Request) -> OperationAcceptedResponse:
     """Build a recorded spec on one node, or build once and distribute.
 
     ``nodes`` produces the image on the first and copies it to the rest.
@@ -330,10 +339,9 @@ async def build_image(payload: dict[str, Any], request: Request) -> OperationAcc
     with an operation id, poll ``GET /v1/operations/{id}`` to terminal.
     """
     service = request.app.state.image_builds
-    reference = str(payload.get("reference"))
-    spec = str(payload.get("spec"))
-    nodes = payload.get("nodes")
-    node_ids = [str(node) for node in nodes] if isinstance(nodes, list) and nodes else None
+    reference = payload.reference
+    spec = payload.spec
+    node_ids = list(payload.nodes) if payload.nodes else None
 
     # Refused *before* the 202, not after. A caller must be able to tell three
     # outcomes apart, and the first of them is "not accepted,
@@ -342,6 +350,9 @@ async def build_image(payload: dict[str, Any], request: Request) -> OperationAcc
     # would turn a clean 404 into a poll, and would put a failure in the
     # operation history for work that never started.
     service.require_spec(spec)
+    # A background slot (CodeGuard CG-15), after the cheap refusal above.
+    admission = request.app.state.work_admission
+    admission.admit("this image build")
 
     operations = request.app.state.operations_service
     operation = operations.begin(
@@ -359,13 +370,31 @@ async def build_image(payload: dict[str, Any], request: Request) -> OperationAcc
         progress={
             "reference": reference,
             "spec": spec,
-            "nodes": node_ids or [str(payload.get("node_id"))],
+            "nodes": node_ids or [str(payload.node_id)],
         },
     )
     asyncio.get_running_loop().run_in_executor(
-        None, _run_build, service, operations, operation.id, spec, reference, node_ids, payload
+        None,
+        _released,
+        admission,
+        _run_build,
+        service,
+        operations,
+        operation.id,
+        spec,
+        reference,
+        node_ids,
+        payload,
     )
     return OperationAcceptedResponse(operation_id=operation.id)
+
+
+def _released(admission: Any, work: Any, *args: Any) -> None:
+    """Run ``work`` on the background thread, then give its admission slot back."""
+    try:
+        work(*args)
+    finally:
+        admission.release()
 
 
 def _run_build(
@@ -375,7 +404,7 @@ def _run_build(
     spec: str,
     reference: str,
     node_ids: list[str] | None,
-    payload: dict[str, Any],
+    payload: ImageBuildRequest,
 ) -> None:
     """Run an image build to terminal on the route's background thread.
 
@@ -386,7 +415,7 @@ def _run_build(
         if node_ids is not None:
             result = service.build_and_distribute(spec, nodes=node_ids, reference=reference)
         else:
-            result = service.build(spec, node_id=str(payload.get("node_id")), reference=reference)
+            result = service.build(spec, node_id=str(payload.node_id), reference=reference)
     except Exception as exc:
         _record_failure(operations, operation_id, exc, default_code="image_build_failed")
         return
@@ -426,6 +455,8 @@ async def pull_image(payload: ImagePullRequest, request: Request) -> OperationAc
     Long-running for a runtime image (gigabytes), so it is an operation polled
     to terminal like a model acquire.
     """
+    admission = request.app.state.work_admission
+    admission.admit("this image pull")
     operations = request.app.state.operations_service
     operation = operations.begin(
         kind=OperationKind.IMAGE_ACQUIRE, target_type="image", target_id=new_ulid()
@@ -433,13 +464,17 @@ async def pull_image(payload: ImagePullRequest, request: Request) -> OperationAc
     operations.mark_running(operation.id)
     stager = request.app.state.image_stager
     asyncio.get_running_loop().run_in_executor(
-        None, _run_image_pull, stager, operations, operation.id, payload
+        None, _run_image_pull, stager, operations, operation.id, payload, admission
     )
     return OperationAcceptedResponse(operation_id=operation.id)
 
 
 def _run_image_pull(
-    stager: Any, operations: Any, operation_id: str, payload: ImagePullRequest
+    stager: Any,
+    operations: Any,
+    operation_id: str,
+    payload: ImagePullRequest,
+    admission: Any = None,
 ) -> None:
     try:
         outcomes = stager.stage(payload.reference, list(payload.nodes))
@@ -449,18 +484,28 @@ def _run_image_pull(
             _record_failure(operations, operation_id, exc, default_code="image_pull_failed")
         except Exception:
             operations.fail(operation_id, code="image_pull_failed", message=str(exc))
+    finally:
+        if admission is not None:
+            admission.release()
 
 
 @router.post("/images:import", dependencies=[Depends(require_auth_dep)])
-def import_image(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+def import_image(payload: ImageArchiveImportRequest, request: Request) -> dict[str, Any]:
     """Import a prebuilt archive onto a node."""
     service = request.app.state.image_builds
     return service.import_archive(  # type: ignore[no-any-return]
-        node_id=str(payload.get("node_id")),
-        reference=str(payload.get("reference")),
-        archive_name=str(payload.get("archive_name")),
-        expected_image_id=payload.get("expected_image_id"),
+        node_id=payload.node_id,
+        reference=payload.reference,
+        archive_name=payload.archive_name,
+        expected_image_id=payload.expected_image_id,
     )
+
+
+@router.get("/openapi.json", dependencies=[Depends(require_auth_dep)], include_in_schema=False)
+def authenticated_openapi(request: Request) -> dict[str, Any]:
+    """The API schema, for an operator holding the management token (CodeGuard CG-18)."""
+    schema: dict[str, Any] = request.app.openapi()
+    return schema
 
 
 @router.get("/version", dependencies=[Depends(require_auth_dep)])
@@ -604,6 +649,9 @@ async def acquire_model(
         target_id=new_ulid(),  # the Model row is created during acquire
     )
     models_service = _models_service(request)
+    # A background slot first (CodeGuard CG-15); released when the work ends.
+    admission = request.app.state.work_admission
+    admission.admit("this model acquisition")
     # One download per repository at a time. Refused here, before the 202, so a
     # caller is told at once rather than polling an operation that waits an
     # hour behind another -- and the refusal itself is on the record.
@@ -616,6 +664,7 @@ async def acquire_model(
             nodes=payload.nodes,
         )
     except AcquisitionInProgressError as exc:
+        admission.release()
         operations.fail(operation.id, code=exc.code, message=exc.message)
         raise
     # The work starts here, so the record says so.
@@ -634,7 +683,7 @@ async def acquire_model(
     # SQLite repo is ``check_same_thread=False`` with an ``RLock`` and
     # ``NodeHTTPClient`` builds a per-call ``httpx.Client``.
     asyncio.get_running_loop().run_in_executor(
-        None, _run_acquire, models_service, operations, operation.id, payload
+        None, _run_acquire, models_service, operations, operation.id, payload, admission
     )
     return OperationAcceptedResponse(operation_id=operation.id)
 
@@ -644,6 +693,7 @@ def _run_acquire(
     operations: Any,
     operation_id: str,
     payload: ModelAcquireRequest,
+    admission: Any = None,
 ) -> None:
     """Run a model acquire to terminal on the route's background thread.
 
@@ -680,6 +730,8 @@ def _run_acquire(
             file_selector=tuple(payload.file_selector),
             operation_id=operation_id,
         )
+        if admission is not None:
+            admission.release()
 
 
 @router.get(
@@ -1160,9 +1212,13 @@ def export_deployment(
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_auth_dep)],
 )
-def create_deployment_from_export(payload: dict, request: Request) -> OperationAcceptedResponse:
+def create_deployment_from_export(
+    payload: DeploymentCreateFromExportRequest, request: Request
+) -> OperationAcceptedResponse:
     """Recreate a deployment from an export artifact."""
-    export = payload.get("export", payload)
+    # Validated against the export document's own structure (CodeGuard CG-11),
+    # then handed on as the plain mapping the service reads.
+    export = payload.export.model_dump(exclude_none=True)
     deployments = _deployments_service(request)
     operations = request.app.state.operations_service
     operation = operations.begin(
@@ -1175,7 +1231,7 @@ def create_deployment_from_export(payload: dict, request: Request) -> OperationA
     try:
         node_names = (export or {}).get("placement", {}).get("nodes", []) or []
         warnings = deployments.comparability_warnings(export or {}, node_names)
-        deployments.create_from_export(export or {})
+        deployments.create_from_export(export, target_endpoint=payload.endpoint)
         operations.succeed(
             operation.id,
             per_node_outcomes={"warnings": warnings} if warnings else None,

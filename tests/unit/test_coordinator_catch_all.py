@@ -3,9 +3,11 @@
 Before the fix an untyped exception became ``internal_error`` with an empty
 ``detail`` -- an opaque terminal outcome that named nothing, which is the
 recurring defect in this codebase (a record that stopped matching reality,
-with nothing comparing them). The handler now logs a traceback and puts the
-exception type and a bounded message in ``detail``, so any future
-``internal_error`` is diagnosable. These tests pin that contract without
+with nothing comparing them). The handler logs the message and traceback
+under an ``error_id`` and puts the exception type and that id in ``detail``,
+so any future ``internal_error`` is diagnosable from the log -- while the
+exception's text never reaches the client, where it could carry request or
+provider content (CodeGuard CG-12). These tests pin that contract without
 coupling to a specific route's failure mode.
 """
 
@@ -41,42 +43,29 @@ def _client(app: Any) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_catch_all_includes_exception_type_and_message() -> None:
-    """An untyped exception surfaces its type and a bounded message, not an empty detail."""
+def test_catch_all_names_the_type_and_an_error_id_not_the_message() -> None:
+    """The type and a log correlation id reach the client; the exception text does not."""
     client = _client(_app_with_boom_route())
     resp = client.get("/__boom", headers=_AUTH)
-
     assert resp.status_code == 500
     body = resp.json()
     assert body["code"] == "internal_error"
     detail = body["detail"]
     assert detail["exception_type"] == "RuntimeError"
-    assert "widget store is on fire" in detail["message"]
+    assert len(detail["error_id"]) == 12
+    assert "widget store is on fire" not in resp.text
 
 
-def test_catch_all_caps_message_length() -> None:
-    """The message is bounded so an oversized exception cannot flood the response."""
-    app, _ = build_test_coordinator()
-
-    @app.get("/__longboom")
-    async def _longboom() -> dict[str, str]:
-        raise RuntimeError("x" * 5000)
-
-    client = _client(app)
-    body = client.get("/__longboom", headers=_AUTH).json()
-    assert len(body["detail"]["message"]) <= 500
-
-
-def test_catch_all_logs_exception(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The handler logs the unexpected error with a traceback for diagnosis."""
-    calls: list[str] = []
+def test_catch_all_logs_exception_under_the_error_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The handler logs the unexpected error with a traceback, keyed by the id it returns."""
+    calls: list[tuple[str, tuple[Any, ...]]] = []
     monkeypatch.setattr(
         app_module._logger,
         "exception",
-        lambda msg, *a, **kw: calls.append(msg),
+        lambda msg, *a, **kw: calls.append((msg, a)),
     )
     client = _client(_app_with_boom_route())
-    client.get("/__boom", headers=_AUTH)
-
+    error_id = client.get("/__boom", headers=_AUTH).json()["detail"]["error_id"]
     assert calls, "the catch-all must log the unexpected error (D6)"
-    assert calls[0] == "unexpected internal error"
+    assert calls[0][0].startswith("unexpected internal error")
+    assert error_id in calls[0][1]
