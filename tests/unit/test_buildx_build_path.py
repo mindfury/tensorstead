@@ -77,7 +77,7 @@ def _patch_cli(monkeypatch: pytest.MonkeyPatch, *, available: bool) -> list[list
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout="#5 DONE 1.2s\n", stderr="")
 
-    monkeypatch.setattr(docker_py.subprocess, "run", _run)
+    monkeypatch.setattr(docker_py, "_run_capped", _capped(_run))
     return calls
 
 
@@ -150,7 +150,7 @@ def test_a_failed_buildx_build_is_still_diagnosable(monkeypatch: pytest.MonkeyPa
     def _run(argv: list[str], **kwargs: Any) -> Any:
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
 
-    monkeypatch.setattr(docker_py.subprocess, "run", _run)
+    monkeypatch.setattr(docker_py, "_run_capped", _capped(_run))
 
     with pytest.raises(ImageBuildError) as raised:
         _engine().build_image(reference=_REF, base_image="base@sha256:x", steps=_STEPS)
@@ -191,7 +191,7 @@ def test_output_from_both_streams_reaches_the_log(monkeypatch: pytest.MonkeyPatc
             argv, 2, stdout="nvcc fatal : unsupported arch\n", stderr="#6 [3/4] RUN compile\n"
         )
 
-    monkeypatch.setattr(docker_py.subprocess, "run", _run)
+    monkeypatch.setattr(docker_py, "_run_capped", _capped(_run))
 
     with pytest.raises(ImageBuildError) as raised:
         _engine().build_image(reference=_REF, base_image="base@sha256:x", steps=_STEPS)
@@ -209,7 +209,7 @@ def test_a_build_that_outruns_the_node_bound_says_so(monkeypatch: pytest.MonkeyP
     def _run(argv: list[str], **kwargs: Any) -> Any:
         raise subprocess.TimeoutExpired(argv, docker_py._BUILDX_TIMEOUT_SECONDS)
 
-    monkeypatch.setattr(docker_py.subprocess, "run", _run)
+    monkeypatch.setattr(docker_py, "_run_capped", _capped(_run))
 
     with pytest.raises(ImageBuildError, match="bound"):
         _engine().build_image(reference=_REF, base_image="base@sha256:x", steps=_STEPS)
@@ -220,3 +220,19 @@ def test_the_node_bound_is_below_the_coordinator_hop_bound() -> None:
     from tensorstead.coordinator.node_http import _BUILD_TIMEOUT_SECONDS
 
     assert docker_py._BUILDX_TIMEOUT_SECONDS < _BUILD_TIMEOUT_SECONDS
+
+
+def _capped(run: Any) -> Any:
+    """Adapt a ``subprocess.run`` fake to ``_run_capped``'s (returncode, lines) shape."""
+
+    def inner(argv: list[str], timeout: float) -> tuple[int, list[str]]:
+        done = run(argv, timeout=timeout)
+        lines = [
+            line
+            for stream in (done.stdout, done.stderr)
+            for line in (stream or "").splitlines()
+            if line.strip()
+        ]
+        return done.returncode, lines
+
+    return inner

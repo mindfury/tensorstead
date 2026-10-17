@@ -241,3 +241,13 @@ class ImageStagingError(DomainError):
     """An image could not be put on every node without a second registry pull."""
 
     code = "image_staging_failed"
+
+
+class InvalidCredentialSourceError(DomainError, ValueError):
+    """A credential source (value / env / file) cannot be used as given.
+
+    Also a ``ValueError``, which is what callers caught before it existed. The
+    message names the problem and never the value (CodeGuard CG-12).
+    """
+
+    code = "invalid_credential_source"

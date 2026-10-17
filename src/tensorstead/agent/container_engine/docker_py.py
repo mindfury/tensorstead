@@ -17,10 +17,13 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
+import selectors
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -34,6 +37,7 @@ from tensorstead.agent.container_engine.base import (
     ImageNotPresentError,
     ImagePullError,
 )
+from tensorstead.agent.container_engine.bounded_output import BoundedTail
 from tensorstead.ports.runtime_adapter import ContainerRequirements
 
 _LEGACY_API_PORT = 8000
@@ -180,6 +184,83 @@ def _docker_cli() -> str | None:
     return shutil.which("docker")
 
 
+# Docker's json-file driver, rotated: at most ~3 x 50 MB per container.
+_BOUNDED_LOG_CONFIG: dict[str, Any] = {
+    "type": "json-file",
+    "config": {"max-size": "50m", "max-file": "3"},
+}
+
+# A runtime log tail is for reading on a screen; this is far past that.
+_RUNTIME_LOG_CHARS = 1024 * 1024
+
+
+def _bounded_logs(container: Any, *, tail: int, max_chars: int) -> str:
+    """The last ``tail`` log lines, never more than ``max_chars`` held at once.
+
+    ``logs(tail=N)`` returns the last N lines as one byte string, and a single
+    newline-free record of any size is one line -- so a runtime or probe that
+    writes one giant line made the agent read all of it (CodeGuard CG-07).
+    Streamed into a ``BoundedTail`` instead.
+    """
+    bounded = BoundedTail(max_chars=max_chars)
+    bounded.extend(container.logs(stdout=True, stderr=True, tail=tail, stream=True, follow=False))
+    return bounded.text
+
+
+def _next_chunk(
+    process: subprocess.Popen[bytes],
+    selector: selectors.BaseSelector,
+    deadline: float,
+    argv: list[str],
+    timeout: float,
+) -> bytes:
+    """The next output chunk, ``b""`` at end of output; ``TimeoutExpired`` past the deadline.
+
+    Blocks on the pipe -- this runs only inside a build request, never idle.
+    """
+    assert process.stdout is not None  # noqa: S101 -- requested by the caller
+    remaining = deadline - time.monotonic()
+    while remaining > 0:
+        if selector.select(timeout=remaining):
+            return os.read(process.stdout.fileno(), 65536)
+        remaining = deadline - time.monotonic()
+    process.kill()
+    process.wait()
+    raise subprocess.TimeoutExpired(argv, timeout)
+
+
+def _run_capped(argv: list[str], timeout: float) -> tuple[int, list[str]]:
+    """Run ``argv``; return its exit code and the bounded tail of its output.
+
+    BuildKit writes progress to stderr and the build's own output to stdout;
+    both are the build log, so they are read as one stream. Read as it
+    arrives into a ``BoundedTail`` rather than captured whole and trimmed
+    afterwards -- a build step that floods its output cannot exhaust the agent's
+    memory (CodeGuard CG-07). Raises ``subprocess.TimeoutExpired`` after
+    killing the process when ``timeout`` passes.
+    """
+    tail = BoundedTail()
+    process = subprocess.Popen(  # noqa: S603 - absolute path, fixed argv, no shell
+        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    assert process.stdout is not None  # noqa: S101 -- requested above
+    deadline = time.monotonic() + timeout
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        while chunk := _next_chunk(process, selector, deadline, argv, timeout):
+            tail.append(chunk)
+        process.wait(timeout=max(deadline - time.monotonic(), 1.0))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+    return process.returncode, tail.lines()
+
+
 def _buildx_available(cli: str) -> bool:
     """Whether this host has a working buildx builder.
 
@@ -218,7 +299,9 @@ def _build_log_lines(exc: BaseException) -> list[str]:
     log = getattr(exc, "build_log", None)
     if log is None:
         return []
-    lines: list[str] = []
+    # Bounded as it is read (CodeGuard CG-07): a step that floods its output
+    # used to be accumulated line by line in full on this error path.
+    tail = BoundedTail()
     # Suppressed, not handled: a truncated log is still the evidence, and this
     # runs on an error path that must not raise a second failure over the first.
     with contextlib.suppress(Exception):
@@ -231,8 +314,8 @@ def _build_log_lines(exc: BaseException) -> list[str]:
                 text = f"{text}{detail['message']}"
             elif not text and chunk.get("error"):
                 text = str(chunk["error"])
-            lines.extend(line for line in text.splitlines() if line.strip())
-    return lines
+            tail.append(text if text.endswith("\n") else text + "\n")
+    return tail.lines()
 
 
 def _failing_step_index(lines: list[str]) -> int | None:
@@ -670,14 +753,7 @@ class DockerEngine:
                 context,
             ]
             try:
-                completed = subprocess.run(  # noqa: S603 - absolute path, fixed argv, no shell
-                    argv,
-                    capture_output=True,
-                    check=False,
-                    text=True,
-                    errors="replace",
-                    timeout=_BUILDX_TIMEOUT_SECONDS,
-                )
+                returncode, lines = _run_capped(argv, _BUILDX_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
                 raise ImageBuildError(
                     f"build of {reference!r} exceeded this node's "
@@ -690,19 +766,10 @@ class DockerEngine:
                     f"build of {reference!r} could not be started: {exc}", reference=reference
                 ) from exc
 
-            # BuildKit writes its progress to stderr and the built image's own
-            # output to stdout. Both are the build log; keeping only one loses
-            # either the step markers or the compiler's message.
-            lines = [
-                line
-                for stream in (completed.stdout, completed.stderr)
-                for line in (stream or "").splitlines()
-                if line.strip()
-            ]
-            if completed.returncode != 0:
+            if returncode != 0:
                 raise _build_failure_from_lines(
                     lines,
-                    reason=f"docker buildx build exited {completed.returncode}",
+                    reason=f"docker buildx build exited {returncode}",
                     reference=reference,
                     steps=steps,
                 )
@@ -774,14 +841,14 @@ class DockerEngine:
         container = None
         removal_failure: str | None = None
         try:
+            create_args.setdefault("log_config", _BOUNDED_LOG_CONFIG)
             container = self._docker().containers.create(**create_args)
             container.start()
             result = container.wait(timeout=timeout_seconds)
             # Bounded read. The probe's payload is its last line, so a tail
             # keeps everything that matters while a runaway image cannot make
             # the agent read its output until the node runs out of memory.
-            raw = container.logs(stdout=True, stderr=True, tail=_PROBE_LOG_LINES)
-            output = raw.decode("utf-8", "replace")[-_PROBE_OUTPUT_CHARS:]
+            output = _bounded_logs(container, tail=_PROBE_LOG_LINES, max_chars=_PROBE_OUTPUT_CHARS)
             if result.get("StatusCode", 1) != 0:
                 raise ImageBuildError(
                     f"probe of {image!r} exited {result.get('StatusCode')}: {output[-2000:]}",
@@ -1081,6 +1148,9 @@ class DockerEngine:
             merged_env = dict(create_args.get("environment") or {})
             merged_env.update(environment)
             create_args["environment"] = merged_env
+        # Rotated on disk, so a runtime that floods its output cannot fill the
+        # node's disk through Docker's log driver (CodeGuard CG-07).
+        create_args.setdefault("log_config", _BOUNDED_LOG_CONFIG)
         container = self._docker().containers.create(image, **create_args)
         return str(container.id)
 
@@ -1204,15 +1274,12 @@ class DockerEngine:
         except Exception:
             return None
         try:
-            raw = container.logs(tail=max(1, tail), stdout=True, stderr=True, timestamps=False)
+            return _bounded_logs(container, tail=max(1, tail), max_chars=_RUNTIME_LOG_CHARS)
         except Exception as exc:
             # A container can exist with no readable log (a driver that does
             # not support reading, for instance). Saying so beats returning an
             # empty string, which reads as "the runtime said nothing".
             return f"[logs unavailable: {type(exc).__name__}: {exc}]"
-        if isinstance(raw, bytes):
-            return raw.decode("utf-8", errors="replace")
-        return str(raw)
 
     def get_digest(self, name: str) -> str | None:
         try:

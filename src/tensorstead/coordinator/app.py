@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from tensorstead.contracts.admission import BodyLimitMiddleware, WorkAdmission
+from tensorstead.contracts.validation import handle_validation_error
 from tensorstead.coordinator.auth import CoordinatorAuth
 from tensorstead.domain import errors as domain_errors
 from tensorstead.version import VERSION
@@ -58,6 +62,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "acquisition_in_progress": 409,
     "replication_failed": 409,
     "image_staging_failed": 502,
+    "invalid_credential_source": 422,
+    "busy": 429,
 }
 
 
@@ -85,11 +91,28 @@ def build_coordinator_app(
     ``repository`` takes precedence over ``store``.
     """
     token = management_token if management_token is not None else management_token_from_env()
-    app = FastAPI(title="tensorstead coordinator", version=VERSION)
+    # No unauthenticated docs or schema (CodeGuard CG-18): FastAPI's defaults
+    # serve /docs, /redoc and /openapi.json outside every route dependency,
+    # disclosing the release and the whole API surface to anyone who can
+    # connect. The schema is served behind the management token at
+    # /v1/openapi.json instead.
+    app = FastAPI(
+        title="tensorstead coordinator",
+        version=VERSION,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.auth = CoordinatorAuth(token)
 
     _wire_services(app, repository, node_client, runtime_adapters, credential_provider, store)
     _mount_routes(app)
+    # Admission budgets (CodeGuard CG-15): bounded request bodies and nesting,
+    # and a fixed number of background-operation slots.
+    app.add_middleware(BodyLimitMiddleware)
+    app.state.work_admission = WorkAdmission()
+
+    app.add_exception_handler(RequestValidationError, handle_validation_error)
 
     @app.exception_handler(domain_errors.DomainError)
     async def _handle_domain_error(
@@ -100,26 +123,19 @@ def build_coordinator_app(
 
     @app.exception_handler(Exception)
     async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
-        # An untyped exception is still a real event: log it with a traceback so
-        # the cause is diagnosable, and name its type in the response rather
-        # than discarding it as an empty ``detail``. An opaque
-        # ``internal_error`` on a call that actually completed is the
-        # recurring defect in this codebase -- a record that
-        # stopped matching reality with nothing comparing them. Surfacing the
-        # exception type and a bounded message is what makes "nothing
-        # comparing them" false. The message is capped at 500 chars; these
-        # exceptions name tables, columns, and caller-supplied ids and paths,
-        # never credentials.
-        _logger.exception("unexpected internal error")
+        # Logged in full -- message and traceback -- under an id the response
+        # carries, so the cause is diagnosable from the coordinator's own log.
+        # The response itself names only the exception type: exception text is
+        # not guaranteed free of request or provider content, and returning it
+        # to the client was the error-echo path CodeGuard CG-12 found.
+        error_id = uuid.uuid4().hex[:12]
+        _logger.exception("unexpected internal error (error_id=%s)", error_id)
         return JSONResponse(
             status_code=500,
             content={
                 "code": "internal_error",
                 "message": "unexpected internal error",
-                "detail": {
-                    "exception_type": type(exc).__name__,
-                    "message": str(exc)[:500],
-                },
+                "detail": {"exception_type": type(exc).__name__, "error_id": error_id},
             },
         )
 

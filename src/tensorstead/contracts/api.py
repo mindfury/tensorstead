@@ -15,9 +15,17 @@ No model here carries an inference request or response payload.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 
 class ClientContractModel(BaseModel):
@@ -462,3 +470,142 @@ class OperationResponse(ClientContractModel):
     progress: dict[str, Any] | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+# --------------------------------------------------------------------------
+# Strict request bodies for routes that used to take a raw ``dict`` (CodeGuard
+# CG-11). A dict body ignored unknown fields, coerced or crashed on wrong
+# types (a numeric ``from_file`` was a 500), and appeared in the schema as an
+# untyped object. Every field here is strictly typed and bounded.
+
+_Name = Annotated[StrictStr, Field(min_length=1, max_length=256)]
+_Text = Annotated[StrictStr, Field(min_length=1, max_length=4096)]
+_Ref = Annotated[StrictStr, Field(min_length=1, max_length=1024)]
+
+
+class InferenceCredentialSetRequest(ClientContractModel):
+    """Exactly one of ``value``, ``from_env`` or ``from_file``."""
+
+    value: Annotated[StrictStr, Field(min_length=1, max_length=65536)] | None = None
+    from_env: _Name | None = None
+    from_file: _Text | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> InferenceCredentialSetRequest:
+        given = [f for f in (self.value, self.from_env, self.from_file) if f is not None]
+        if len(given) != 1:
+            raise ValueError("exactly one of value, from_env or from_file is required")
+        return self
+
+
+class InferenceCredentialBindRequest(ClientContractModel):
+    """``name`` binds that credential; ``null`` clears the binding."""
+
+    name: _Name | None
+
+
+class CodeApprovalCreateRequest(ClientContractModel):
+    option: _Name
+    runtime_type: _Name
+    model_source_id: _Name
+    source_model_id: _Ref
+    model_revision: _Name
+    image_digest: _Name
+    reason: _Text
+    approved_by: _Name
+
+
+class BuildSpecSetRequest(ClientContractModel):
+    base_image: _Ref
+    # A step may carry a base64 build context (buildspecs hold no files), which
+    # is hundreds of KB in this estate's real recipes. The request-body budget
+    # bounds the total.
+    steps: Annotated[
+        list[Annotated[StrictStr, Field(max_length=4 * 1024 * 1024)]], Field(max_length=200)
+    ]
+    entrypoint: Annotated[
+        list[Annotated[StrictStr, Field(max_length=4096)]], Field(max_length=64)
+    ] = Field(default_factory=list)
+
+
+class ImageBuildRequest(ClientContractModel):
+    """Build ``spec`` as ``reference`` on one node, or on several and distribute."""
+
+    spec: _Name
+    reference: _Ref
+    node_id: _Name | None = None
+    nodes: Annotated[list[_Name], Field(min_length=1, max_length=64)] | None = None
+
+    @model_validator(mode="after")
+    def _one_target(self) -> ImageBuildRequest:
+        if (self.node_id is None) == (self.nodes is None):
+            raise ValueError("give exactly one of node_id or nodes")
+        return self
+
+
+class ImageArchiveImportRequest(ClientContractModel):
+    node_id: _Name
+    reference: _Ref
+    archive_name: _Name
+    expected_image_id: _Name | None = None
+
+
+class _ExportDeployment(ClientContractModel):
+    name: _Name
+    id: _Name | None = None
+    desired_state: _Name | None = None
+
+
+class _ExportModel(ClientContractModel):
+    source: _Name
+    id: _Ref
+    revision: _Name | None = None
+    revision_pinned: StrictBool | None = None
+    file_selector: Annotated[list[_Ref], Field(max_length=256)] | None = None
+    note: _Text | None = None
+
+
+class _ExportRuntime(ClientContractModel):
+    type: _Name
+    version: _Name
+
+
+class _ExportImage(ClientContractModel):
+    reference: _Ref
+    digest: Annotated[StrictStr, Field(max_length=256)] | None = None
+    platform: _Name | None = None
+
+
+class _ExportPlacement(ClientContractModel):
+    nodes: Annotated[list[_Name], Field(min_length=1, max_length=64)]
+    endpoint: _Ref
+
+
+class DeploymentExportDocument(ClientContractModel):
+    """The artifact ``deployment export`` produces, validated section by section.
+
+    Informational sections (operations, origin platform, approval) are
+    accepted as objects -- they are read, not trusted -- but nothing outside
+    this list is.
+    """
+
+    apiVersion: _Name
+    kind: _Name
+    exported_at: _Name | None = None
+    exported_from_revision: StrictInt | None = None
+    deployment: _ExportDeployment
+    model: _ExportModel
+    runtime: _ExportRuntime
+    image: _ExportImage
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    placement: _ExportPlacement
+    origin_platform: dict[str, Any] | None = None
+    operations: Annotated[list[dict[str, Any]], Field(max_length=10000)] | None = None
+    code_execution_approval: dict[str, Any] | None = None
+
+
+class DeploymentCreateFromExportRequest(ClientContractModel):
+    export: DeploymentExportDocument
+    # Recreating onto another host usually needs another endpoint. Sent by the
+    # CLI's ``--endpoint`` and, until this model existed, never read.
+    endpoint: _Ref | None = None

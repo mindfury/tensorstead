@@ -11,11 +11,12 @@ the FastAPI dependency simply passes.
 
 from __future__ import annotations
 
-import hmac
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from tensorstead.domain.tokens import tokens_match
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -29,6 +30,8 @@ class CoordinatorAuth:
     def require_auth(
         self,
         credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+        *,
+        authorization_headers: int = 1,
     ) -> None:
         """FastAPI dependency: reject when a configured token is not matched.
 
@@ -37,12 +40,19 @@ class CoordinatorAuth:
         """
         if self._token is None:
             return  # open coordinator (loopback plain is permitted)
-        if credentials is None or credentials.scheme.lower() != "bearer":
+        if (
+            credentials is None
+            or credentials.scheme.lower() != "bearer"
+            # Two Authorization headers are ambiguous: refused, not resolved
+            # by whichever one the parser happened to keep (CodeGuard CG-19).
+            or authorization_headers != 1
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "unauthorized", "message": "management token required"},
             )
-        if not hmac.compare_digest(credentials.credentials, self._token):
+        # Bytes, so a non-ASCII value is a 401 rather than a TypeError.
+        if not tokens_match(credentials.credentials, self._token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "unauthorized", "message": "invalid management token"},
