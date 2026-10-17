@@ -19,6 +19,7 @@ from threading import RLock
 from typing import Any
 
 from tensorstead.domain.approvals import CodeExecutionApproval
+from tensorstead.domain.errors import ConcurrentModificationError
 from tensorstead.domain.identity import assert_valid_ulid
 from tensorstead.domain.models import (
     Credential,
@@ -460,6 +461,9 @@ class SQLiteRepository:
         """
         with self._lock:
             self._conn.execute(
+                "DELETE FROM revision_images WHERE deployment_id = ?", (deployment_id,)
+            )
+            self._conn.execute(
                 "DELETE FROM deployment_revisions WHERE deployment_id = ?",
                 (deployment_id,),
             )
@@ -480,40 +484,124 @@ class SQLiteRepository:
     # ------------------------------------------------------ deployment revisions
     def insert_revision(self, revision: DeploymentRevision) -> None:
         with self._lock:
+            self._insert_revision_row(revision)
+            self._conn.commit()
+
+    def advance_revision(self, revision: DeploymentRevision, *, expected_current: int) -> None:
+        """Insert ``revision`` and make it current, only if current is still ``expected_current``.
+
+        One transaction, opened with the write lock already held, so the
+        revision row and the pointer move together or not at all -- across
+        processes as well as threads. A stale ``expected_current`` raises
+        ``ConcurrentModificationError`` and leaves no orphaned revision
+        (CodeGuard CG-08).
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                moved = self._conn.execute(
+                    "UPDATE deployments SET current_revision = ? "
+                    "WHERE id = ? AND current_revision = ?",
+                    (revision.revision, revision.deployment_id, expected_current),
+                ).rowcount
+                if moved != 1:
+                    raise ConcurrentModificationError(
+                        f"deployment {revision.deployment_id!r} is no longer at revision "
+                        f"{expected_current}; re-read it and try again",
+                        detail={
+                            "deployment_id": revision.deployment_id,
+                            "expected_revision": expected_current,
+                        },
+                    )
+                self._insert_revision_row(revision)
+            except sqlite3.IntegrityError as exc:
+                self._conn.rollback()
+                raise ConcurrentModificationError(
+                    f"revision {revision.revision} of {revision.deployment_id!r} already exists; "
+                    f"re-read the deployment and try again",
+                    detail={"deployment_id": revision.deployment_id},
+                ) from exc
+            except BaseException:
+                self._conn.rollback()
+                raise
+            self._conn.commit()
+
+    def record_revision_image(
+        self, deployment_id: str, revision: int, node_id: str, image_digest: str
+    ) -> None:
+        """Record that ``revision`` ran ``image_digest`` on ``node_id``; idempotent."""
+        with self._lock:
             self._conn.execute(
-                """
-                INSERT INTO deployment_revisions (
-                    deployment_id, revision, model_id, model_source_id,
-                    source_model_id, resolved_revision, revision_pinned,
-                    runtime_type, runtime_version, image_reference, image_digest,
-                    runtime_config, participating_nodes, endpoint,
-                    origin_platform_facts, restore_on_boot, created_at,
-                    code_approval_fingerprint, code_approval_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    revision.deployment_id,
-                    revision.revision,
-                    revision.model_id,
-                    revision.model_source_id,
-                    revision.source_model_id,
-                    revision.resolved_revision,
-                    int(revision.revision_pinned),
-                    revision.runtime_type,
-                    revision.runtime_version,
-                    revision.image_reference,
-                    revision.image_digest,
-                    _json(revision.runtime_config),
-                    _json(list(revision.participating_nodes)),
-                    revision.endpoint,
-                    _json(revision.origin_platform_facts),
-                    int(revision.restore_on_boot),
-                    revision.created_at.isoformat(),
-                    revision.code_approval_fingerprint,
-                    revision.code_approval_id,
-                ),
+                "INSERT OR IGNORE INTO revision_images "
+                "(deployment_id, revision, node_id, image_digest, recorded_at) "
+                "VALUES (?, ?, ?, ?, datetime('now'))",
+                (deployment_id, revision, node_id, image_digest),
             )
             self._conn.commit()
+
+    def revision_image_digests(self, deployment_id: str, revision: int, node_id: str) -> set[str]:
+        """Every image digest ``revision`` has run on ``node_id``."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT image_digest FROM revision_images "
+                "WHERE deployment_id = ? AND revision = ? AND node_id = ?",
+                (deployment_id, revision, node_id),
+            ).fetchall()
+        return {str(row[0]) for row in rows}
+
+    def update_deployment_state(
+        self, deployment_id: str, *, desired_state: str, running_revision: int | None
+    ) -> None:
+        """Write only the lifecycle columns -- never the definition pointer or name."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE deployments SET desired_state = ?, running_revision = ? WHERE id = ?",
+                (desired_state, running_revision, deployment_id),
+            )
+            self._conn.commit()
+
+    def rename_deployment(self, deployment_id: str, name: str) -> None:
+        """Write only the name."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE deployments SET name = ? WHERE id = ?", (name, deployment_id)
+            )
+            self._conn.commit()
+
+    def _insert_revision_row(self, revision: DeploymentRevision) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO deployment_revisions (
+                deployment_id, revision, model_id, model_source_id,
+                source_model_id, resolved_revision, revision_pinned,
+                runtime_type, runtime_version, image_reference, image_digest,
+                runtime_config, participating_nodes, endpoint,
+                origin_platform_facts, restore_on_boot, created_at,
+                code_approval_fingerprint, code_approval_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                revision.deployment_id,
+                revision.revision,
+                revision.model_id,
+                revision.model_source_id,
+                revision.source_model_id,
+                revision.resolved_revision,
+                int(revision.revision_pinned),
+                revision.runtime_type,
+                revision.runtime_version,
+                revision.image_reference,
+                revision.image_digest,
+                _json(revision.runtime_config),
+                _json(list(revision.participating_nodes)),
+                revision.endpoint,
+                _json(revision.origin_platform_facts),
+                int(revision.restore_on_boot),
+                revision.created_at.isoformat(),
+                revision.code_approval_fingerprint,
+                revision.code_approval_id,
+            ),
+        )
 
     def get_revision(self, deployment_id: str, revision: int) -> DeploymentRevision | None:
         with self._lock:

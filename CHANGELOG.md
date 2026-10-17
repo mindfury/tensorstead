@@ -37,6 +37,39 @@ Fixes from an independent Project CodeGuard review (IDs CG-xx refer to it).
   identified as expected, carrying no name the caller didn't allow, or nothing
   is loaded. A load that differs from its declaration removes only what it
   introduced.
+- **CG-05: the model-tree digest is framed and versioned.** v1 hashed
+  `path NUL bytes` with no length framing, so `{a: "x", b: "y"}` and
+  `{a: "xb\0y"}` hashed identically, letting a peer substitute a differently
+  shaped tree. v2 (`tsdir2-sha256:`) hashes a canonical manifest of type, framed
+  path, size and per-file SHA-256, counts empty directories, and refuses links
+  and special files. Replication refuses to verify against a v1 digest rather
+  than reinterpreting it.
+- **CG-06: replication extraction is budgeted.** The transfer ceiling bounded
+  wire bytes only, so a sparse member could expand far past it. Extraction is
+  now one streaming pass that, before writing each entry, refuses sparse
+  entries, links and special files, and enforces the member count, the
+  cumulative logical size (the same ceiling), the free-space reserve and a
+  deadline. Hashing is bounded as a result.
+- **CG-08: definition changes can't be lost to a concurrent lifecycle
+  operation.** `modify` didn't share the lifecycle lock, and lifecycle saves
+  rewrote the whole deployment row from a stale snapshot, so a modify accepted
+  mid-start was rolled back and its revision orphaned. Concurrent modifies
+  could also hit a raw uniqueness error. Lifecycle, modify and rename now share
+  one per-deployment lock. Lifecycle and rename write only their own columns.
+  Modify inserts the revision and advances the pointer in one `BEGIN IMMEDIATE`
+  compare-and-swap, answering a lost race with `concurrent_modification`.
+- **CG-09: stop, restart and remove reach every node the deployment ran on.**
+  After a placement change while running, stop drove only the new nodes,
+  recorded `stopped`, and left the old node serving. Stop and restart now
+  target the running revision's nodes plus the current revision's, and remove
+  targets every retained revision's nodes. An unreachable old node fails the
+  stop instead of reporting success.
+- **CG-10: an image a retained revision ran can't be deleted.** The guard
+  compared revision digests the service never populated, so nothing was ever
+  protected. Each start now records, per revision and node, the digest the
+  agent ran (`revision_images`, migration 0010). The guard checks those
+  bindings and, for revisions without evidence, protects any image whose
+  reference they name.
 
 ## [1.6.0] - 2026-10-17
 

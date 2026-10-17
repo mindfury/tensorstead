@@ -46,6 +46,7 @@ from tensorstead.domain.models import (
 from tensorstead.domain.served_name import declared_served_name
 from tensorstead.ports.repository import Repository
 from tensorstead.service.approvals import authorize_code_options
+from tensorstead.service.deployment_locks import DeploymentLocks
 from tensorstead.service.nodes import refuse_if_node_reserved
 
 # A rename's target. Creation has never constrained names, and existing ones
@@ -61,8 +62,11 @@ class DeploymentService:
         repository: Repository,
         runtime_adapters: dict[str, Any],
         node_client: Any | None = None,
+        deployment_locks: DeploymentLocks | None = None,
     ) -> None:
         self._repo = repository
+        # Shared with the lifecycle service (CodeGuard CG-08).
+        self._deployment_locks = deployment_locks or DeploymentLocks()
         self._adapters = runtime_adapters
         # Optional: without it the advisory pre-flight check is simply not
         # performed. It is advisory, so its absence must never change
@@ -441,10 +445,11 @@ class DeploymentService:
         deployment = self.get(deployment_id)
         if deployment.name == new_name:
             return deployment
-        self._check_name_available(new_name, exclude_deployment=deployment.id)
-        renamed = deploy_replace(deployment, name=new_name)
-        self._repo.save_deployment(renamed)
-        return renamed
+        with self._deployment_locks.for_deployment(deployment.id):
+            self._check_name_available(new_name, exclude_deployment=deployment.id)
+            # The name column only; never a whole-row write from this snapshot.
+            self._repo.rename_deployment(deployment.id, new_name)
+        return deploy_replace(deployment, name=new_name)
 
     def _model_label(self, model_id: str | None) -> str:
         """``source:model`` for messages, falling back to the bare id."""
@@ -506,6 +511,39 @@ class DeploymentService:
 
     # ------------------------------------------------- modification & export
     def modify(
+        self,
+        deployment_id: str,
+        *,
+        runtime_config: dict[str, Any] | None = None,
+        replace_config: bool = False,
+        image_reference: str | None = None,
+        runtime_version: str | None = None,
+        endpoint: str | None = None,
+        participating_nodes: builtins.list[str] | None = None,
+        model_id: str | None = None,
+        restore_on_boot: bool | None = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Modify a deployment definition, holding its lock (see ``_modify_locked``).
+
+        Serialized with every lifecycle operation on the same deployment, which
+        takes the same lock (CodeGuard CG-08).
+        """
+        with self._deployment_locks.for_deployment(deployment_id):
+            return self._modify_locked(
+                deployment_id,
+                runtime_config=runtime_config,
+                replace_config=replace_config,
+                image_reference=image_reference,
+                runtime_version=runtime_version,
+                endpoint=endpoint,
+                participating_nodes=participating_nodes,
+                model_id=model_id,
+                restore_on_boot=restore_on_boot,
+                expected_revision=expected_revision,
+            )
+
+    def _modify_locked(
         self,
         deployment_id: str,
         *,
@@ -696,16 +734,11 @@ class DeploymentService:
             code_approval_fingerprint=approval.fingerprint if approval else "",
             code_approval_id=approval.id if approval else "",
         )
-        self._repo.insert_revision(new_rev)
-
-        # Advance the deployment's current_revision; identity and desired state
-        # are untouched.
-        self._repo.save_deployment(
-            deploy_replace(
-                deployment,
-                current_revision=next_revision,
-            )
-        )
+        # Insert and advance in one compare-and-swap: only if the deployment is
+        # still at the revision this modify read. A whole-row save here used to
+        # write a stale snapshot over a concurrent lifecycle change, and two
+        # modifies could collide on the revision number (CodeGuard CG-08).
+        self._repo.advance_revision(new_rev, expected_current=deployment.current_revision)
 
         restart_required = deployment.running_revision is not None
         return {

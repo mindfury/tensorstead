@@ -30,8 +30,10 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import tarfile
 import tempfile
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -172,22 +174,65 @@ class ReplicationOutcome:
     detail: str | None = None
 
 
-def directory_digest(root: Path) -> str:
-    """A deterministic digest over a directory's *contents*.
+# Versioned, because a digest is a recorded fact: the v1 format below is never
+# silently reinterpreted. v1 hashed ``path NUL bytes`` for each file in order
+# with no length framing, so file bytes could impersonate the next entry's name
+# and contents -- ``{a: "x", b: "y"}`` and ``{a: "xb\\0y"}`` hashed identically
+# (CodeGuard CG-05). A v1 digest is refused for verification, not trusted.
+DIGEST_PREFIX = "tsdir2-sha256:"
+_DOMAIN = b"tensorstead/directory-digest/v2\n"
 
-    Sorted relative paths plus their bytes — deliberately not a digest of a tar
-    stream, which would fold in mtimes and ordering and make two identical
-    models hash differently on two hosts. What we are verifying is that the
-    weights are the same weights, not that the transfer was byte-identical.
+
+class UnsupportedTreeEntry(ValueError):
+    """A model tree holds something other than regular files and directories."""
+
+
+def directory_digest(root: Path) -> str:
+    """A deterministic, unambiguous digest over a directory's *contents* (v2).
+
+    A canonical manifest, sorted by path: for every directory and regular file,
+    a type byte, the length-prefixed UTF-8 path, the content length, and the
+    content's SHA-256; then an entry count. Lengths frame every field, so no
+    content can be read as a boundary. Directories are entries, so an empty one
+    counts. Links, devices and the like are refused rather than followed or
+    skipped: a model tree has no business holding them, and silently ignoring
+    one would let two different trees share a digest.
+
+    Contents only -- not a tar stream, which folds in mtimes and ordering --
+    because what is verified is that the weights are the same weights.
     """
-    digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        digest.update(str(path.relative_to(root)).encode())
-        digest.update(b"\0")
-        with path.open("rb") as handle:
-            while chunk := handle.read(_CHUNK):
-                digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
+    entries: list[tuple[bytes, bytes, int, bytes]] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in [*dirnames, *filenames]:
+            path = Path(dirpath) / name
+            rel = path.relative_to(root).as_posix().encode("utf-8", "surrogateescape")
+            mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                entries.append((rel, b"d", 0, bytes(32)))
+            elif stat.S_ISREG(mode):
+                content = hashlib.sha256()
+                size = 0
+                with path.open("rb") as handle:
+                    while chunk := handle.read(_CHUNK):
+                        content.update(chunk)
+                        size += len(chunk)
+                entries.append((rel, b"f", size, content.digest()))
+            else:
+                raise UnsupportedTreeEntry(
+                    f"{rel.decode('utf-8', 'replace')!r} is neither a regular file nor a "
+                    f"directory; model trees hold only those"
+                )
+    entries.sort(key=lambda entry: entry[0])
+    digest = hashlib.sha256(_DOMAIN)
+    for rel, kind, size, content_digest in entries:
+        digest.update(kind)
+        digest.update(len(rel).to_bytes(8, "big"))
+        digest.update(rel)
+        digest.update(size.to_bytes(8, "big"))
+        digest.update(content_digest)
+    digest.update(b"end")
+    digest.update(len(entries).to_bytes(8, "big"))
+    return f"{DIGEST_PREFIX}{digest.hexdigest()}"
 
 
 def _directory_size(root: Path) -> int:
@@ -324,12 +369,67 @@ class PeerReplicationService:
         """
         try:
             with tarfile.open(archive, "r:") as tar:
-                tar.extractall(staging_dir, filter="data")
+                self._extract_within_budget(tar, staging_dir)
         except (tarfile.TarError, OSError) as exc:
             raise ReplicationError(
                 "replication_failed",
                 f"could not unpack the artifact pulled from the peer: {exc}",
             ) from exc
+
+    def _extract_within_budget(self, tar: tarfile.TarFile, staging_dir: Path) -> None:
+        """Extract one member at a time, refusing before writing anything over budget.
+
+        The transfer ceiling bounds the bytes received, not what they expand
+        to: a sparse member can declare gigabytes in a few kilobytes, and
+        nothing bounded the member count or the time spent (CodeGuard CG-06).
+        Each member is checked before it is written -- type, cumulative
+        logical size against the same ceiling, the free-space reserve, the
+        member count, and an overall deadline -- in one streaming pass that
+        never holds the member list. Hashing afterwards reads at most what was
+        allowed in, so it is bounded too.
+        """
+        ceiling = _max_transfer_bytes()
+        max_members = int(os.environ.get("TENSORSTEAD_MAX_ARTIFACT_MEMBERS", "100000"))
+        deadline = time.monotonic() + float(
+            os.environ.get("TENSORSTEAD_MAX_UNPACK_SECONDS", str(4 * 60 * 60))
+        )
+        total = 0
+        count = 0
+        while (member := tar.next()) is not None:
+            count += 1
+            if count > max_members:
+                raise ReplicationError(
+                    "replication_failed",
+                    f"the artifact has more than {max_members} entries; refused",
+                )
+            if time.monotonic() > deadline:
+                raise ReplicationError(
+                    "replication_failed", "unpacking the artifact exceeded its deadline"
+                )
+            # Both signals: tarfile fills ``sparse`` while parsing PAX sparse
+            # headers, while a GNU sparse member keeps its own type -- which
+            # ``isfile()`` counts as regular.
+            sparse = member.issparse() or member.type == tarfile.GNUTYPE_SPARSE
+            if sparse or not (member.isfile() or member.isdir()):
+                raise ReplicationError(
+                    "replication_failed",
+                    f"artifact entry {member.name!r} is not a plain file or directory; "
+                    f"model trees hold only those",
+                )
+            total += member.size
+            if total > ceiling:
+                raise ReplicationError(
+                    "replication_failed",
+                    f"the artifact expands past the {ceiling}-byte transfer ceiling; refused",
+                )
+            free = shutil.disk_usage(staging_dir).free
+            if free - member.size < _MIN_FREE_BYTES_TO_ATTEMPT:
+                raise ReplicationError(
+                    "replication_failed",
+                    f"extracting {member.name!r} would leave less than "
+                    f"{_MIN_FREE_BYTES_TO_ATTEMPT} bytes free; refused",
+                )
+            tar.extract(member, staging_dir, filter="data")
 
     def _verify(
         self,
@@ -352,6 +452,18 @@ class PeerReplicationService:
                 f"refusing to promote {model_id!r}: no content_digest was supplied "
                 f"to verify against",
                 detail={"model_id": model_id},
+            )
+        if not expected.startswith(DIGEST_PREFIX):
+            # A v1 digest is ambiguous (see DIGEST_PREFIX), so a copy that
+            # matched it would prove nothing. Refused, never recomputed in the
+            # old format to make it match.
+            self._acquisition.mark_failed(model_id, detail="legacy unframed content digest")
+            raise ReplicationError(
+                "verification_failed",
+                f"refusing to verify {model_id!r} against the legacy unframed digest "
+                f"{expected!r}; re-acquire it on the holder to record a "
+                f"{DIGEST_PREFIX.rstrip(':')} digest",
+                detail={"model_id": model_id, "expected": expected},
             )
         if computed != expected:
             self._acquisition.mark_failed(

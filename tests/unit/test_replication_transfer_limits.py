@@ -207,14 +207,11 @@ def _content_digest_of(archive_bytes: bytes) -> str:
     """Compute the digest ``replicate`` will verify against: the *unpacked*
     directory digest, not the archive bytes, matching ``directory_digest``.
     """
-    import hashlib
+    import tempfile
 
-    digest = hashlib.sha256()
-    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as tar:
-        for member in sorted(tar.getmembers(), key=lambda m: m.name):
-            digest.update(member.name.encode())
-            digest.update(b"\0")
-            extracted = tar.extractfile(member)
-            assert extracted is not None
-            digest.update(extracted.read())
-    return f"sha256:{digest.hexdigest()}"
+    from tensorstead.agent.replication import directory_digest
+
+    with tempfile.TemporaryDirectory() as unpacked:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as tar:
+            tar.extractall(unpacked, filter="data")
+        return directory_digest(Path(unpacked))
