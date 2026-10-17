@@ -63,7 +63,13 @@ from typing import Any, Final
 # repository. Unclassified, it reached vLLM through ``extra_args`` with no
 # review at all. The same version is also the first in which the passthrough
 # itself refuses every ``loads-code`` option (see ``authorize_extra_arg``).
-POLICY_VERSION: Final = "2026-10-15.1"
+#
+# 2026-10-16.1 adds a second approvable class, ``relaxes-isolation``, holding
+# one option: ``allow_io_uring``. NVIDIA's dual-Spark GLM-5.3 recipe runs its
+# container ``--privileged``; its b12x checkpoint loader reads through io_uring,
+# which Docker's default seccomp profile has denied since Docker 25. Without an
+# opening the documented launch could not load its weights at all.
+POLICY_VERSION: Final = "2026-10-16.1"
 
 # The effect classes. These are the policy; the map beneath is the reviewed
 # application of it.
@@ -73,6 +79,11 @@ LOADS_CODE: Final = "loads-code"
 MOVES_THE_ENDPOINT: Final = "moves-the-endpoint"
 REACHES_THE_NETWORK: Final = "reaches-the-network"
 PRODUCT_OWNED: Final = "product-owned"
+# Widens what the container may ask of the host kernel beyond Docker's default
+# confinement. Not a runtime flag at all -- a container setting the adapter
+# declares -- and classified here so the same approval path that authorizes
+# code loading is the only door to it.
+RELAXES_ISOLATION: Final = "relaxes-isolation"
 # The one authorized class: an option that changes how the runtime executes
 # what it was already told to serve, without touching any fact the product
 # owns. Batch sizes, memory fractions, cache dtypes, parallelism.
@@ -102,6 +113,10 @@ _REFUSAL_BY_EFFECT: Final[dict[str, str]] = {
     REACHES_THE_NETWORK: (
         "it reaches an external resource at launch, which turns starting a deployment "
         "into an unrecorded outbound call from the node"
+    ),
+    RELAXES_ISOLATION: (
+        "it relaxes the container's confinement on the host kernel; what a runtime may "
+        "ask of the host is not something a deployment record may decide on its own"
     ),
     PRODUCT_OWNED: (
         "the product derives this from the deployment, and a fact that is both derived "
@@ -143,6 +158,9 @@ _CLASSIFIED: Final[dict[str, str]] = {
     "logits_processors": LOADS_CODE,
     "worker_cls": LOADS_CODE,
     "worker_extension_cls": LOADS_CODE,
+    # Relax isolation. Never a vLLM flag: the adapter turns it into a seccomp
+    # exception for the io_uring syscalls and nothing else.
+    "allow_io_uring": RELAXES_ISOLATION,
     # Move the endpoint.
     "host": MOVES_THE_ENDPOINT,
     "port": MOVES_THE_ENDPOINT,
@@ -241,16 +259,23 @@ def classify(dest: str) -> str | None:
     return _CLASSIFIED.get(normalize_dest(dest))
 
 
-# The one class an approval can open, and the reason it is the only one.
+# The classes an approval can open, and the reason they are the only ones.
 #
-# ``loads-code`` is refused for *insufficient authority* -- "not something a
-# deployment record may decide on its own" -- and authority is precisely what a
-# reviewed approval supplies. Every other refusal is a statement that the thing
-# itself is wrong, which no signature repairs: a credential in argv is still
-# host-visible, a redirected model still makes the record describe something
-# that is not running, and a moved endpoint is still unreachable. Widening this
-# set would turn one narrow, reviewed opening into a general bypass.
-APPROVABLE_EFFECTS: Final[frozenset[str]] = frozenset({LOADS_CODE})
+# ``loads-code`` and ``relaxes-isolation`` are refused for *insufficient
+# authority* -- "not something a deployment record may decide on its own" --
+# and authority is precisely what a reviewed approval supplies. Every other
+# refusal is a statement that the thing itself is wrong, which no signature
+# repairs: a credential in argv is still host-visible, a redirected model still
+# makes the record describe something that is not running, and a moved endpoint
+# is still unreachable. Widening this set would turn one narrow, reviewed
+# opening into a general bypass.
+APPROVABLE_EFFECTS: Final[frozenset[str]] = frozenset({LOADS_CODE, RELAXES_ISOLATION})
+
+
+def effect_reason(dest: str) -> str | None:
+    """Why an option's effect class is refused, without the remedy; ``None`` if unclassified."""
+    effect = classify(dest)
+    return _REFUSAL_BY_EFFECT.get(effect) if effect else None
 
 
 def is_approvable(dest: str) -> bool:

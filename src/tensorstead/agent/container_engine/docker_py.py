@@ -25,6 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
+from tensorstead.agent.container_engine import seccomp
 from tensorstead.agent.container_engine.base import (
     ContainerState,
     ImageBuildError,
@@ -1228,6 +1229,11 @@ def _apply_requirements(
         # work and would grant everything besides, leaving a record that cannot
         # say what its container may do.
         create_args["cap_add"] = list(requirements.capabilities)
+    if requirements.seccomp_allow:
+        # Docker's default confinement plus the named groups and nothing else --
+        # never ``privileged`` or ``seccomp=unconfined``, which would drop every
+        # other rule along with the one the runtime needed relaxed.
+        create_args["security_opt"] = seccomp.security_opt(requirements.seccomp_allow)
     if requirements.shm_size:
         create_args["shm_size"] = requirements.shm_size
     if requirements.ipc_mode:

@@ -331,6 +331,7 @@ def build_agent_app(
 
     from tensorstead.agent.acquisition import ModelAcquireError
     from tensorstead.agent.container_engine.base import ImageBuildError, ImagePullError
+    from tensorstead.agent.container_engine.seccomp import UnknownSeccompGroupError
     from tensorstead.agent.image_distribution import ImageDistributionError
 
     @app.exception_handler(ModelAcquireError)
@@ -399,6 +400,16 @@ def build_agent_app(
                 "message": str(exc),
                 "detail": {"reference": error.reference if error else ""},
             },
+        )
+
+    @app.exception_handler(UnknownSeccompGroupError)
+    async def _handle_unknown_seccomp_group(_request: Request, exc: Exception) -> JSONResponse:
+        # An adapter asked for an opening this agent does not define -- an agent
+        # older than the coordinator's adapters. Refused before any container
+        # exists, with the reason, rather than started without the opening.
+        return JSONResponse(
+            status_code=422,
+            content={"code": "seccomp_group_unknown", "message": str(exc), "detail": {}},
         )
 
     facts = platform_facts if platform_facts is not None else _platform_facts_from_env()

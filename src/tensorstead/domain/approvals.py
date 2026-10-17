@@ -88,10 +88,10 @@ from typing import Any, Final
 
 from tensorstead.domain.identity import assert_valid_ulid
 
-# The one approvable effect class. Kept as a literal rather than imported from
-# the adapters package because the domain does not depend on adapters; the
-# policy module asserts the two agree, so a rename cannot silently split them.
-APPROVABLE_EFFECT: Final = "loads-code"
+# The approvable effect classes. Kept as literals rather than imported from
+# the adapters package because the domain does not depend on adapters; a test
+# asserts the two agree, so a rename cannot silently split them.
+APPROVABLE_EFFECTS: Final = frozenset({"loads-code", "relaxes-isolation"})
 
 # A revision that identifies content for all time. Approvals bind to one, and
 # a tag like ``main`` is refused: the reviewer read the code at a commit, and an

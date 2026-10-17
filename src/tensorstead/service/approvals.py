@@ -21,6 +21,7 @@ from typing import Any
 
 from tensorstead.adapters.runtimes.option_policy import (
     POLICY_VERSION,
+    effect_reason,
     is_approvable,
     normalize_dest,
 )
@@ -193,7 +194,7 @@ def authorize_code_options(
     # reason, rather than failing later as a mysterious fingerprint miss.
     if not model.revision_pinned or not model.resolved_revision:
         raise InvalidDeploymentError(
-            f"a deployment that loads code must name a model pinned to an immutable "
+            f"a deployment that needs an approval must name a model pinned to an immutable "
             f"revision; model {model.source_model_id!r} is "
             f"{'unpinned' if not model.revision_pinned else 'missing a resolved revision'}. "
             f"An approval is granted for code read at one commit, and cannot follow a "
@@ -204,7 +205,7 @@ def authorize_code_options(
     digest = _recorded_image_digest(repository, image_reference, participating_nodes)
     if digest is None:
         raise InvalidDeploymentError(
-            f"a deployment that loads code must name an image already present on its "
+            f"a deployment that needs an approval must name an image already present on its "
             f"nodes, so the approval can bind to the exact runtime that will execute the "
             f"code; no digest is recorded for {image_reference!r} on the declared nodes. "
             f"Acquire or import the image first, then create the deployment",
@@ -223,9 +224,9 @@ def authorize_code_options(
         )
         approval = repository.find_code_approval(candidate)
         if approval is None:
+            reason = effect_reason(option) or "it needs a reviewed approval"
             raise InvalidDeploymentError(
-                f"{option} is not approved for this deployment. It loads code into the "
-                f"runtime, which a deployment record may not decide on its own. A reviewed "
+                f"{option} is not approved for this deployment: {reason}. A reviewed "
                 f"approval for this exact tuple authorizes it:\n"
                 f"  runtime_type    {runtime_type}\n"
                 f"  model_source_id {model.source_id}\n"

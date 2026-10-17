@@ -7,6 +7,28 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **`allow_io_uring` for vLLM deployments: an approval-gated seccomp exception.**
+  NVIDIA's dual-DGX-Spark recipe for `nvidia/GLM-5.3-Flash-FP4-Local` loads its
+  checkpoint with `--load-format b12x`, which reads through io_uring, and gets
+  io_uring by running the container `--privileged`. Docker's default seccomp
+  profile has denied the io_uring syscalls since Docker 25, and Tensorstead
+  refuses privileged containers, so the published launch died loading its
+  weights (`io_uring bounce initialization failed: Operation not permitted`).
+  With `allow_io_uring: true`, the container gets Docker's default profile
+  (shipped from Docker 29.9.1) plus `io_uring_setup`, `io_uring_enter` and
+  `io_uring_register`, and nothing else. It is never `privileged` or
+  `seccomp=unconfined`, and the flag never reaches vLLM's argv.
+- A new approvable effect class, `relaxes-isolation`, holding that one option.
+  Like `trust_remote_code`, it is refused unless a reviewed approval
+  (`code_approval_create`) names the exact runtime, model revision and image
+  digest, and both the coordinator and the agent check it. It can't arrive
+  through `extra_args`. Authorization policy is now `2026-10-16.1`.
+
+### Changed
+- Approval refusals name the option's own reason instead of always saying it
+  "loads code".
+
 ## [1.5.1] - 2026-10-15
 
 ### Security
