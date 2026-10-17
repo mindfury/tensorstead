@@ -14,20 +14,11 @@ they have.
 
 ## How this checks it
 
-Five coordinator routes take an untyped ``payload: dict[str, Any]`` and read it
-with ``payload.get("key")``. That is the population at risk: a typed request
-model would at least appear in OpenAPI, but an untyped dict declares nothing, so
-nothing but this compares the two sides.
-
-So: extract the keys each such route reads, extract the JSON keys the matching
-MCP tool sends, and diff. Source scanning is brittle in general and idiomatic
-here — every guardrail in this directory reads source, because the alternative
-is trusting that two files were changed together.
-
-**The better fix is to type those five routes**, at which point this check
-becomes a comparison of declared shapes rather than a scan for string literals.
-That is recorded as follow-up design work rather than done here, because typing a route
-changes its published contract and deserves its own change.
+Every route body is now a typed request model, so the fields each route accepts
+are read from the app's OpenAPI request schemas and diffed against the JSON keys
+the matching MCP tool sends. (It used to scan route source for
+``payload.get("key")`` on the five raw-``dict`` routes; typing them -- CodeGuard
+CG-11 -- made the comparison of declared shapes possible.)
 """
 
 from __future__ import annotations
@@ -52,25 +43,37 @@ _NOT_FOR_CALLERS: dict[str, str] = {
     # context. Adding a `value` parameter here would undo the entire reason the
     # reference forms exist.
     "value": "MCP takes references only, so no secret enters an agent's context",
+    "secret": "same rule for source credentials: MCP takes from_env/from_file references",
+    # Boot persistence is an operator decision, deliberately left off MCP
+    # create/modify: an agent must not be able to make inference start at boot.
+    "restore_on_boot": "boot persistence is operator-only, never set through MCP",
 }
 
 
 def _route_payload_keys() -> dict[tuple[str, str], set[str]]:
-    """Every ``payload.get("key")`` a route reads, by (method, path)."""
-    source = (_ROUTES / "__init__.py").read_text()
-    found: dict[tuple[str, str], set[str]] = {}
+    """Every field each route's typed request body declares, by (method, path).
 
-    # Split on decorators so each function body is attributed to its own route.
-    blocks = re.split(r"@router\.(get|put|post|delete|patch)\(", source)
-    for method, block in zip(blocks[1::2], blocks[2::2], strict=False):
-        path_match = re.search(r'"([^"]+)"', block)
-        if path_match is None:
-            continue
-        path = path_match.group(1)
-        body = block.split("@router.")[0]
-        keys = set(re.findall(r'payload\.get\(\s*"([^"]+)"', body))
-        if keys:
-            found[(method.upper(), path)] = keys
+    Read from the app's own OpenAPI request schemas -- a comparison of declared
+    shapes, which this file always said was the better check. It became possible
+    when the last raw-``dict`` routes were typed (CodeGuard CG-11), and it covers
+    every typed route rather than only the five that scanning ``payload.get``
+    could see.
+    """
+    from tests.helpers import build_test_coordinator
+
+    app, _ = build_test_coordinator()
+    spec = app.openapi()
+    schemas = spec.get("components", {}).get("schemas", {})
+    found: dict[tuple[str, str], set[str]] = {}
+    for path, operations in spec["paths"].items():
+        for method, operation in operations.items():
+            body = operation.get("requestBody", {}).get("content", {}).get("application/json", {})
+            ref = body.get("schema", {}).get("$ref")
+            if not ref:
+                continue
+            properties = schemas[ref.rsplit("/", 1)[-1]].get("properties", {})
+            if properties:
+                found[(method.upper(), path)] = set(properties)
     return found
 
 
@@ -160,7 +163,7 @@ def test_the_scan_actually_joins_the_two_sides() -> None:
     routes = _route_payload_keys()
     mcp = _mcp_sent_keys()
 
-    assert len(routes) >= 4, f"payload-reading routes dropped to {len(routes)}; scan may be stale"
+    assert len(routes) >= 8, f"typed-body routes dropped to {len(routes)}; scan may be stale"
 
     joined = {key for key in routes if (key[0], _normalise(key[1])) in mcp}
     assert joined, (
@@ -168,6 +171,6 @@ def test_the_scan_actually_joins_the_two_sides() -> None:
         "comparing nothing at all"
     )
 
-    buildspec = ("PUT", "/buildspecs/{name}")
+    buildspec = ("PUT", "/v1/buildspecs/{name}")
     assert buildspec in joined, "the route this guardrail exists for is not being compared"
     assert "entrypoint" in routes[buildspec]

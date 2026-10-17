@@ -64,9 +64,10 @@ class _FakeContainer:
         self.wait_kwargs = kwargs
         return {"StatusCode": self._status_code}
 
-    def logs(self, **kwargs: Any) -> bytes:
+    def logs(self, **kwargs: Any) -> Any:
         self.log_kwargs = kwargs
-        return self._logs
+        # docker-py returns an iterator of chunks when streaming, bytes otherwise.
+        return iter([self._logs]) if kwargs.get("stream") else self._logs
 
     def remove(self, **kwargs: Any) -> None:
         self.removed = True

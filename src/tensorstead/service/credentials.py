@@ -24,7 +24,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from tensorstead.domain.errors import CredentialResolutionError, NotFoundError, StillReferencedError
+from tensorstead.domain.errors import (
+    CredentialResolutionError,
+    InvalidCredentialSourceError,
+    NotFoundError,
+    StillReferencedError,
+)
 from tensorstead.domain.models import Credential, InferenceCredential, ModelSource
 from tensorstead.ports.repository import Repository
 
@@ -88,27 +93,33 @@ def secret_from(
     """
     given = [form for form in (secret, from_env, from_file) if form is not None]
     if len(given) != 1:
-        raise ValueError("exactly one of secret, from_env, or from_file is required")
+        raise InvalidCredentialSourceError(
+            "exactly one of secret, from_env, or from_file is required"
+        )
 
     if secret is not None:
         # Taken verbatim — a secret may legitimately contain whitespace.
         return secret
     if from_env is not None:
         if from_env.startswith(_OWN_ENV_PREFIX):
-            raise ValueError(
-                f"{from_env!r} is a Tensorstead operational variable, not an external "
-                "credential -- it cannot be bound as one"
+            raise InvalidCredentialSourceError(
+                "the variable named in from_env is a Tensorstead operational variable, "
+                "not an external credential -- it cannot be bound as one"
             )
         value = os.environ.get(from_env)
         if value is None:
-            raise ValueError(f"environment variable {from_env!r} is not set")
+            # The name is withheld: the classic mistake is pasting the secret
+            # itself into from_env, and the error must not echo it (CG-12).
+            raise InvalidCredentialSourceError(
+                "the environment variable named in from_env is not set"
+            )
         return value
     # Type narrowing for mypy: from_env was handled above, so this is
     # the remaining branch. Not a check on untrusted input.
     assert from_file is not None  # noqa: S101
     refusal = import_root_refusal(import_root, protected or [])
     if refusal is not None:
-        raise ValueError(refusal)
+        raise InvalidCredentialSourceError(refusal)
     assert import_root is not None  # noqa: S101 -- import_root_refusal returned None
     return _read_secret_file(from_file, import_root)
 
@@ -124,14 +135,14 @@ def _import_parts(path: str, root: Path) -> list[str]:
         try:
             candidate = candidate.relative_to(root)
         except ValueError:
-            raise ValueError(
-                f"credential file {path!r} is outside the credential import directory "
-                f"{str(root)!r}; place it there and name it"
+            raise InvalidCredentialSourceError(
+                f"the credential file named in from_file is outside the credential "
+                f"import directory {str(root)!r}; place it there and name it"
             ) from None
     parts = list(candidate.parts)
     if not parts or any(part in ("", ".", "..") for part in parts):
-        raise ValueError(
-            f"credential file {path!r} is not a plain name inside the import directory"
+        raise InvalidCredentialSourceError(
+            "the credential file named in from_file is not a plain name inside the import directory"
         )
     return parts
 
@@ -164,14 +175,18 @@ def _read_secret_file(path: str, root: Path) -> str:
             dirs.append(os.open(part, dir_flags, dir_fd=dirs[-1]))
         fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirs[-1])
     except OSError as exc:
-        raise ValueError(f"could not read credential file {path!r}: {exc}") from exc
+        raise InvalidCredentialSourceError(
+            f"could not read the credential file named in from_file ({exc.strerror or 'error'})"
+        ) from exc
     finally:
         for d in reversed(dirs):
             os.close(d)
     try:
         mode = os.fstat(fd).st_mode
         if not stat.S_ISREG(mode):
-            raise ValueError(f"credential file {path!r} is not a regular file")
+            raise InvalidCredentialSourceError(
+                "the credential file named in from_file is not a regular file"
+            )
         with os.fdopen(fd, "rb", closefd=True) as handle:
             fd = -1  # ownership transferred to the file object
             data = handle.read(_MAX_SECRET_FILE_BYTES + 1)
@@ -179,8 +194,9 @@ def _read_secret_file(path: str, root: Path) -> str:
         if fd >= 0:
             os.close(fd)
     if len(data) > _MAX_SECRET_FILE_BYTES:
-        raise ValueError(
-            f"credential file {path!r} exceeds the {_MAX_SECRET_FILE_BYTES}-byte limit"
+        raise InvalidCredentialSourceError(
+            f"the credential file named in from_file exceeds the "
+            f"{_MAX_SECRET_FILE_BYTES}-byte limit"
         )
     # A trailing newline is a file convention, not part of the secret.
     return data.decode("utf-8").rstrip("\n")

@@ -860,6 +860,15 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
             dict[str, Any],
             Field(description="An export artifact from deployment_export, verbatim."),
         ],
+        endpoint: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "host:port to serve on instead of the exported endpoint -- usually "
+                    "needed when recreating on another host."
+                )
+            ),
+        ] = None,
     ) -> ApiResult:
         """Recreate a deployment from an export artifact.
 
@@ -873,7 +882,10 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         operation record rather than blocking the call: they inform, they do not
         gate.
         """
-        return client.request("POST", "/v1/deployments:create-from-export", json={"export": export})
+        payload: dict[str, Any] = {"export": export}
+        if endpoint is not None:
+            payload["endpoint"] = endpoint
+        return client.request("POST", "/v1/deployments:create-from-export", json=payload)
 
     @server.tool(name="deployment_start")
     def deployment_start(

@@ -70,6 +70,38 @@ Fixes from an independent Project CodeGuard review (IDs CG-xx refer to it).
   agent ran (`revision_images`, migration 0010). The guard checks those
   bindings and, for revisions without evidence, protects any image whose
   reference they name.
+- **CG-07: build, probe and runtime output is bounded while captured.**
+  buildx output was captured whole, a classic build's error log accumulated in
+  full, and `logs(tail=N)` returned one unbounded string for a newline-free
+  record. All three now stream into a bounded tail (1 MiB, with long lines
+  cut), and buildx is killed at its deadline. Containers Tensorstead creates
+  get a rotated `json-file` log driver (3 × 50 MB).
+- **CG-11: every route body is a strict typed model.** The credential, binding,
+  approval, buildspec, image-build, image-import and create-from-export routes
+  took a raw `dict`, ignoring unknown fields and turning wrong types into 500s.
+  They now reject unknown fields, wrong types, conflicting sources and
+  oversized lists with 422 and write nothing. The export document is validated
+  section by section. This also fixes create-from-export ignoring the
+  `endpoint` override the CLI sent; MCP's `deployment_create_from_export` now
+  takes `endpoint` too.
+- **CG-12: errors never echo what the client sent.** Validation errors keep
+  location, rule and type, but never the rejected input. An unexpected field's
+  name is shown as `<unexpected field>`. Credential-source errors are a typed
+  422 (`invalid_credential_source`) that withholds the env-var name or file
+  path given, so a secret mis-pasted there doesn't bounce back. Unexpected
+  500s return the exception type and an `error_id`; the message and traceback
+  go to the log under that id. The CLI now renders 422s instead of reporting
+  "not this product".
+- **CG-15: admission budgets.** Request body size and JSON depth are limited
+  on every surface; background operations take one of a fixed number of slots
+  (429 `busy` when full); and connections are capped per server. See
+  docs/operations.md, "Admission budgets".
+- **CG-18: no unauthenticated API docs.** `/docs`, `/redoc` and
+  `/openapi.json` are disabled on coordinator and agent. The schema is served
+  at `GET /v1/openapi.json` behind the management token.
+- **CG-19: malformed Authorization headers are a plain 401.** Comparing
+  non-ASCII `str` tokens raised `TypeError`. All three servers now compare
+  bytes, so this can't happen, and refuse duplicate Authorization headers.
 
 ## [1.6.0] - 2026-10-17
 

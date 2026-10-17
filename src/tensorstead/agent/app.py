@@ -59,7 +59,7 @@ def require_management(
     Route modules reference this as ``Depends(require_management)`` so a single
     token configuration gates every management route on the agent.
     """
-    request.app.state.auth.require_management(credentials)
+    request.app.state.auth.require_management(request, credentials)
 
 
 def require_replication(
@@ -73,7 +73,7 @@ def require_replication(
     outcome; holding only the replication token it can pull artifacts but
     cannot issue management instructions to any other node.
     """
-    request.app.state.auth.require_replication(credentials)
+    request.app.state.auth.require_replication(request, credentials)
 
 
 # Board names known to carry integrated memory. A fallback, not the primary
@@ -310,7 +310,25 @@ def build_agent_app(
     ``container_engine``, ``service_manager``, and ``acquisition``. When
     omitted, production defaults are built lazily from the environment.
     """
-    app = FastAPI(title="tensorstead agent", version=AGENT_VERSION)
+    # No docs or schema routes at all (CodeGuard CG-18): nothing reads them, and
+    # FastAPI's defaults would serve them without the management token.
+    app = FastAPI(
+        title="tensorstead agent",
+        version=AGENT_VERSION,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    # Validation errors never echo the rejected input (CodeGuard CG-12).
+    from fastapi.exceptions import RequestValidationError
+
+    from tensorstead.contracts.validation import handle_validation_error
+
+    app.add_exception_handler(RequestValidationError, handle_validation_error)
+    # Bounded request bodies and nesting (CodeGuard CG-15).
+    from tensorstead.contracts.admission import BodyLimitMiddleware
+
+    app.add_middleware(BodyLimitMiddleware)
     app.state.auth = AgentAuth(management_token, replication_token)
 
     @app.middleware("http")
