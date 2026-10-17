@@ -54,6 +54,11 @@ class LocalFileCredentialProvider:
     def __init__(self, root: Path | str | None = None) -> None:
         self._root = Path(root) if root is not None else default_root()
 
+    @property
+    def root(self) -> Path:
+        """Where values are stored; protected from credential file imports."""
+        return self._root
+
     # ------------------------------------------------------------------ port
     def store(self, source_id: str, name: str, value: str) -> str:
         """Persist ``value`` under an owner-only file and return its reference.

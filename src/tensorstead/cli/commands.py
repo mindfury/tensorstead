@@ -1959,7 +1959,11 @@ def credential_set(
     from_file: Annotated[
         str | None,
         typer.Option(
-            "--from-file", help="Read the secret from this file. The value never appears in argv."
+            "--from-file",
+            help=(
+                "Name of a file in the coordinator's credential import directory "
+                "holding the secret. The value never appears in argv."
+            ),
         ),
     ] = None,
     json_mode: Annotated[
@@ -2560,7 +2564,10 @@ def inferencekey_set(
     name: Annotated[str, typer.Argument(help="Name for this credential.")],
     from_file: Annotated[
         str | None,
-        typer.Option("--from-file", help="Read the secret from this file."),
+        typer.Option(
+            "--from-file",
+            help="Name of a file in the coordinator's credential import directory.",
+        ),
     ] = None,
     from_env: Annotated[
         str | None,

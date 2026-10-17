@@ -20,6 +20,7 @@ put an image on a node: the import route and the peer-distribution service.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -40,7 +41,7 @@ class _Engine:
         self.removed: list[str] = []
         self.checked: list[str] = []
 
-    def import_image(self, *, archive_path: str) -> str:
+    def import_image(self, *, archive_path: str, **_policy: Any) -> str:
         return _IMAGE_ID
 
     def verify_image_materializable(self, *, image_id: str) -> None:

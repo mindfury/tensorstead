@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tensorstead.agent.acquisition import ModelAcquisitionService
@@ -23,6 +24,23 @@ def test_runtime_model_path_migrates_a_legacy_colon_path_without_redownload(tmp_
     legacy = store / model_id
     legacy.mkdir(parents=True)
     (legacy / "weights.bin").write_text("already downloaded")
+    # A genuine legacy store has the replica marker the old agent wrote; a
+    # migration is only ever of a replica this agent recorded (CodeGuard CG-02).
+    markers = tmp_path / "state"
+    markers.mkdir(parents=True, exist_ok=True)
+    (markers / "legacy.json").write_text(
+        json.dumps(
+            {
+                "model_id": model_id,
+                "resolved_revision": "a" * 40,
+                "state": "available",
+                "local_path": str(legacy),
+                "verified_at": None,
+                "size_bytes": 18,
+                "content_digest": None,
+            }
+        )
+    )
 
     runtime_path = service.runtime_model_path(str(legacy))
 

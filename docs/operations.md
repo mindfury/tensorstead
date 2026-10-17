@@ -230,6 +230,21 @@ key until you explicitly `deployment restart`. The secret is read from a
 prompt, `--from-file`, or `--from-env` — never an argv flag — and no command
 returns a stored value, because no read path exists.
 
+`--from-file` names a file **inside the coordinator's credential import
+directory** (`TENSORSTEAD_CREDENTIAL_IMPORT_DIR`, created by the coordinator
+role as `/var/lib/tensorstead/credential-imports`). Place the secret file there
+on the coordinator host, then pass its name:
+
+```bash
+sudo install -m 0640 -g projectx ./hf-token /var/lib/tensorstead/credential-imports/hf-token
+stead credential set huggingface team --from-file hf-token
+```
+
+Anything outside that directory, a traversing name, or a path through a symlink
+is refused, so Tensorstead's own secrets (its env files, TLS keys and credential
+store) can never be re-imported as a credential. With the variable unset,
+`--from-file` is refused outright.
+
 ## History
 
 ```bash

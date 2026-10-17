@@ -49,7 +49,10 @@ def service(tmp_path: Path) -> CredentialService:
     migrate(conn, _MIGRATIONS)
     repository = SQLiteRepository(conn)
     provider = LocalFileCredentialProvider(root=tmp_path / "credentials")
-    return CredentialService(repository, provider)
+    (tmp_path / "imports").mkdir()
+    return CredentialService(
+        repository, provider, import_root=tmp_path / "imports", protected=[provider.root]
+    )
 
 
 # ------------------------------------------ exactly one default per source
@@ -224,7 +227,7 @@ def test_set_from_env_stores_the_value_and_persists_a_reference(
 def test_set_from_file_stores_the_value_and_persists_a_reference(
     service: CredentialService, tmp_path: Path
 ) -> None:
-    secret_file = tmp_path / "hf-org"
+    secret_file = tmp_path / "imports" / "hf-org"
     secret_file.write_text("hf_from_file\n")
     service.set("huggingface", "org", from_file=str(secret_file))
 
@@ -269,7 +272,7 @@ def test_set_from_file_refuses_a_symlink(service: CredentialService, tmp_path: P
     """``O_NOFOLLOW`` refuses atomically at open time, not stat-then-open."""
     real_secret = tmp_path / "real-secret"
     real_secret.write_text("root-owned-value\n")
-    link = tmp_path / "link-to-secret"
+    link = tmp_path / "imports" / "link-to-secret"
     link.symlink_to(real_secret)
 
     with pytest.raises(ValueError, match="could not read"):
@@ -280,7 +283,7 @@ def test_set_from_file_refuses_a_non_regular_file(
     service: CredentialService, tmp_path: Path
 ) -> None:
     """A FIFO (or device, or socket) is not a credential file."""
-    fifo_path = tmp_path / "not-a-file"
+    fifo_path = tmp_path / "imports" / "not-a-file"
     os.mkfifo(fifo_path)
 
     with pytest.raises(ValueError, match="not a regular file"):
@@ -290,7 +293,7 @@ def test_set_from_file_refuses_a_non_regular_file(
 def test_set_from_file_refuses_a_file_over_the_size_cap(
     service: CredentialService, tmp_path: Path
 ) -> None:
-    oversized = tmp_path / "oversized"
+    oversized = tmp_path / "imports" / "oversized"
     oversized.write_bytes(b"x" * (65536 + 1))
 
     with pytest.raises(ValueError, match=r"exceeds the .*-byte limit"):
@@ -326,3 +329,73 @@ def test_provider_resolve_of_an_unknown_reference_is_an_error(tmp_path: Path) ->
     provider = LocalFileCredentialProvider(root=tmp_path / "credentials")
     with pytest.raises(NotFoundError):
         provider.resolve("local-file:does-not-exist")
+
+
+# ------------------------------- file imports stay inside the import root
+# CodeGuard CG-03: any coordinator-readable file used to be importable, so a
+# caller could copy Tensorstead's own operational secrets into a credential.
+
+
+def test_a_file_outside_the_import_directory_is_refused(
+    service: CredentialService, tmp_path: Path
+) -> None:
+    secret = tmp_path / "coordinator.env"
+    secret.write_text("TENSORSTEAD_MGMT_TOKEN=synthetic\n")
+    with pytest.raises(ValueError, match="outside the credential import directory"):
+        service.set("huggingface", "x", from_file=str(secret))
+
+
+@pytest.mark.parametrize("name", ["../coordinator.env", "sub/../../coordinator.env", "."])
+def test_traversal_out_of_the_import_directory_is_refused(
+    service: CredentialService, tmp_path: Path, name: str
+) -> None:
+    (tmp_path / "coordinator.env").write_text("synthetic")
+    with pytest.raises(ValueError):
+        service.set("huggingface", "x", from_file=name)
+
+
+def test_a_symlinked_parent_directory_is_refused(
+    service: CredentialService, tmp_path: Path
+) -> None:
+    outside = tmp_path / "secrets"
+    outside.mkdir()
+    (outside / "token").write_text("synthetic")
+    (tmp_path / "imports" / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="could not read"):
+        service.set("huggingface", "x", from_file="linked/token")
+
+
+def test_a_name_inside_the_import_directory_is_read(
+    service: CredentialService, tmp_path: Path
+) -> None:
+    (tmp_path / "imports" / "team").mkdir()
+    (tmp_path / "imports" / "team" / "hf").write_text("hf_in_root\n")
+    service.set("huggingface", "team", from_file="team/hf")
+    assert service.resolve_for_acquisition("huggingface", "team") == "hf_in_root"
+
+
+def test_file_imports_are_disabled_without_an_import_directory(tmp_path: Path) -> None:
+    conn = connect(":memory:")
+    migrate(conn, _MIGRATIONS)
+    provider = LocalFileCredentialProvider(root=tmp_path / "credentials")
+    service = CredentialService(SQLiteRepository(conn), provider)
+    (tmp_path / "f").write_text("x")
+    with pytest.raises(ValueError, match="file imports are disabled"):
+        service.set("huggingface", "x", from_file=str(tmp_path / "f"))
+
+
+@pytest.mark.parametrize("where", ["provider", "provider-parent", "etc"])
+def test_an_import_directory_overlapping_own_secrets_is_refused(tmp_path: Path, where: str) -> None:
+    conn = connect(":memory:")
+    migrate(conn, _MIGRATIONS)
+    provider = LocalFileCredentialProvider(root=tmp_path / "credentials")
+    root = {
+        "provider": tmp_path / "credentials",
+        "provider-parent": tmp_path,
+        "etc": Path("/etc/tensorstead/imports"),
+    }[where]
+    service = CredentialService(
+        SQLiteRepository(conn), provider, import_root=root, protected=[provider.root]
+    )
+    with pytest.raises(ValueError, match="overlaps"):
+        service.set("huggingface", "x", from_file="anything")

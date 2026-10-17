@@ -25,6 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
+from tensorstead.agent import image_archive
 from tensorstead.agent.container_engine import seccomp
 from tensorstead.agent.container_engine.base import (
     ContainerState,
@@ -817,7 +818,31 @@ class DockerEngine:
             )
         return str(output)
 
-    def import_image(self, *, archive_path: str) -> str:
+    def import_image(
+        self,
+        *,
+        archive_path: str,
+        expected_id: str | None = None,
+        allowed_names: frozenset[str] = frozenset(),
+    ) -> str:
+        # Read the archive's own declaration before the daemon sees it: one
+        # image, the expected identity, no unauthorized name (CodeGuard CG-04).
+        try:
+            declared = image_archive.authorize(
+                image_archive.declared_images(archive_path),
+                expected_id=expected_id,
+                allowed_names=set(allowed_names),
+            )
+        except Exception as exc:
+            raise ImageBuildError(
+                f"archive refused before loading: {exc}", reference=archive_path
+            ) from exc
+        try:
+            # The archive client, not the ordinary one: an import builds exactly
+            # one client, the one with the archive timeout.
+            before = {str(i.id) for i in self._docker_for_archives().images.list(all=True)}
+        except Exception:
+            before = set()
         try:
             with open(archive_path, "rb") as handle:
                 # `handle`, not `handle.read()`: docker-py's `load_image` passes
@@ -836,6 +861,20 @@ class DockerEngine:
         loaded = list(images)
         if not loaded:
             raise ImageBuildError("archive contained no image", reference=archive_path)
+        if len(loaded) != 1 or str(loaded[0].id) not in declared.identities:
+            # The daemon loaded something the declaration did not say. Remove
+            # what this load introduced -- never an image that was already here.
+            introduced = [str(i.id) for i in loaded if str(i.id) not in before]
+            for image_id in introduced:
+                try:
+                    self.remove_image(image_id=image_id, force=True)
+                except Exception:  # noqa: S112 -- reported below by the refusal itself
+                    continue
+            raise ImageBuildError(
+                f"archive loaded {[str(i.id) for i in loaded]}, not the one image it "
+                f"declared {sorted(declared.identities)}; removed {introduced}",
+                reference=archive_path,
+            )
         return str(loaded[0].id)
 
     def verify_image_materializable(self, *, image_id: str) -> None:
