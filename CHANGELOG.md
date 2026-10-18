@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.7.0] - 2026-10-17
 
 ### Security
 Fixes from an independent Project CodeGuard review (IDs CG-xx refer to it).
@@ -447,6 +447,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.7.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.7.0
 [1.6.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.6.0
 [1.5.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.1
 [1.5.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.5.0
