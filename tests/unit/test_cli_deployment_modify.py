@@ -32,7 +32,10 @@ class _MockClient:
     def request(
         self, method: str, path: str, *, json: Any = None, headers: Any = None
     ) -> httpx.Response:
-        if method == "GET" and path == "/v1/deployments":
+        if method == "GET" and path.split("?", 1)[0] == "/v1/deployments":
+            # The lookup narrows server-side by name rather than fetching (and
+            # observing) every deployment.
+            assert "name=qwen36-27b" in path, path
             return httpx.Response(200, json=_DEPLOYMENTS)
         if method == "PATCH" and path.startswith("/v1/deployments/"):
             self.patched = json
