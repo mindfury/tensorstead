@@ -33,12 +33,47 @@
     cmd: "{{ tensorstead_python_executable }} -m venv {{ tensorstead_venv }}"
     creates: "{{ tensorstead_venv }}/bin/python"
 
-- name: Install Tensorstead coordinator, agent, CLI, and MCP extras
+- name: Check the venv matches the wheelhouse target
+  ansible.builtin.command:
+    cmd: >-
+      {{ tensorstead_venv }}/bin/python -c
+      "import platform, sys; print(f'linux-{platform.machine()}-cp{sys.version_info[0]}{sys.version_info[1]}')"
+  register: common_venv_target
+  changed_when: false
+
+- name: Refuse a wheelhouse built for another platform
+  ansible.builtin.assert:
+    that: common_venv_target.stdout == common_wheelhouse.target
+    fail_msg: >-
+      The wheelhouse targets {{ common_wheelhouse.target }} but this venv is
+      {{ common_venv_target.stdout }}; rebuild it with scripts/build_wheelhouse.py --target.
+
+- name: Copy the dependency wheelhouse to the host
+  ansible.builtin.copy:
+    src: "{{ tensorstead_package_wheelhouse }}/"
+    dest: "{{ tensorstead_root }}/wheelhouse/"
+    owner: root
+    group: root
+    mode: '0644'
+    directory_mode: '0755'
+
+# The reviewed lock, exactly: no index, every file hash-checked, no source
+# builds, nothing resolved (CodeGuard CG-14). Reinstalling the same release
+# cannot move a dependency.
+- name: Install the locked dependency set from the wheelhouse
   ansible.builtin.pip:
-    name: >-
-      tensorstead[coordinator,agent,cli,mcp] @ file://{{ tensorstead_root }}/{{
-      tensorstead_package_artifact | basename }}
+    requirements: "{{ tensorstead_root }}/wheelhouse/requirements.txt"
     executable: "{{ tensorstead_venv }}/bin/pip"
+    extra_args: >-
+      --no-index --find-links {{ tensorstead_root }}/wheelhouse/wheels
+      --require-hashes --only-binary=:all: --no-deps
+  notify: Restart Tensorstead services
+
+- name: Install Tensorstead itself, without resolving anything
+  ansible.builtin.pip:
+    name: "file://{{ tensorstead_root }}/{{ tensorstead_package_artifact | basename }}"
+    executable: "{{ tensorstead_venv }}/bin/pip"
+    extra_args: --no-deps --no-index
     # Development wheels intentionally share the project version.  Reinstall
     # the controller-built artifact so a new wheel is not mistaken for the
     # previously-installed distribution merely because its version matches.

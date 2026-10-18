@@ -49,7 +49,9 @@ Tensorstead replaces that with a small, strict contract:
   even if the coordinator is down.
 - **Safe to hand to an agent.** The MCP surface exposes exactly the same
   operations as the CLI and API — and no shell, no SSH, no arbitrary paths.
-  Anything an agent can do is recorded like anything a human does.
+  Anything an agent can do is recorded like anything a human does (the same
+  records, not per-person attribution -- see
+  [ADR 0001](docs/adr/0001-trust-boundaries.md)).
 - **Honest about its limits.** Readings are reported for your judgement and
   never block an operation; failures name what failed and where; features that
   cannot be done truthfully (like "rollback") are [deliberately
