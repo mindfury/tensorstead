@@ -169,9 +169,16 @@ def test_starting_a_deployment_records_the_image_it_pulled() -> None:
 
     saved: list[ImageRecord] = []
 
+    bound: list[tuple[str, int, str, str]] = []
+
     class _Repo:
         def save_image(self, image: ImageRecord) -> None:
             saved.append(image)
+
+        def record_revision_image(
+            self, deployment_id: str, revision: int, node_id: str, digest: str
+        ) -> None:
+            bound.append((deployment_id, revision, node_id, digest))
 
     from tensorstead.service.lifecycle import LifecycleService
 
@@ -180,6 +187,8 @@ def test_starting_a_deployment_records_the_image_it_pulled() -> None:
 
     class _Revision:
         image_reference = "registry.example/vllm:1.2.3"
+        deployment_id = "dep-1"
+        revision = 3
 
     class _Node:
         id = "node-a"
@@ -196,6 +205,8 @@ def test_starting_a_deployment_records_the_image_it_pulled() -> None:
     assert saved[0].reference == "registry.example/vllm:1.2.3"
     assert saved[0].node_id == "node-a"
     assert isinstance(saved[0].pulled_at, datetime)
+    # The revision-to-image binding the deletion guard relies on (CG-10).
+    assert bound == [("dep-1", 3, "node-a", "sha256:abcdef")]
 
 
 def test_a_response_without_a_digest_records_nothing() -> None:

@@ -135,6 +135,7 @@ def serve(
     # command, and a client-only install has no web server to import.
     import uvicorn
 
+    from tensorstead.contracts.admission import connection_limit
     from tensorstead.coordinator.app import build_coordinator_app
 
     app = build_coordinator_app(store=store)
@@ -145,6 +146,7 @@ def serve(
             port=port,
             ssl_certfile=str(tls_cert),
             ssl_keyfile=str(tls_key),
+            limit_concurrency=connection_limit(),
         )
         return
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, limit_concurrency=connection_limit())

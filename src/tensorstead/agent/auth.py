@@ -18,19 +18,20 @@ hops is a separate, mandatory concern.
 
 from __future__ import annotations
 
-import hmac
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from tensorstead.domain.tokens import tokens_match
 
 _bearer = HTTPBearer(auto_error=False)
 
 ROLE_MANAGEMENT = "management"
 ROLE_REPLICATION = "replication"
 
-AuthDependency = Callable[[HTTPAuthorizationCredentials | None], None]
+AuthDependency = Callable[[Request, HTTPAuthorizationCredentials | None], None]
 
 
 class AgentAuth:
@@ -44,17 +45,23 @@ class AgentAuth:
 
     def _require(self, role: str) -> AuthDependency:
         def dependency(
+            request: Request,
             credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
         ) -> None:
             token = self._tokens.get(role)
             if token is None:
                 return  # this role is open (loopback permitted)
-            if credentials is None or credentials.scheme.lower() != "bearer":
+            if (
+                credentials is None
+                or credentials.scheme.lower() != "bearer"
+                # Ambiguous: refused (CodeGuard CG-19).
+                or len(request.headers.getlist("authorization")) != 1
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail={"code": "unauthorized", "message": f"{role} token required"},
                 )
-            if not hmac.compare_digest(credentials.credentials, token):
+            if not tokens_match(credentials.credentials, token):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail={"code": "unauthorized", "message": f"invalid {role} token"},

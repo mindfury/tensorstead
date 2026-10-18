@@ -21,10 +21,11 @@ Run it:
 
 from __future__ import annotations
 
-import hmac
 import os
 from typing import Any
 
+from tensorstead.contracts.admission import BodyLimitMiddleware, connection_limit
+from tensorstead.domain.tokens import tokens_match
 from tensorstead.mcp.client import CoordinatorClient
 from tensorstead.mcp.tools import register_tools
 
@@ -61,8 +62,13 @@ class _BearerAuth:
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] == "http":
-            supplied = dict(scope.get("headers", [])).get(b"authorization", b"").decode("latin-1")
-            if not hmac.compare_digest(supplied, f"Bearer {self.token}"):
+            # Every Authorization header, not the last one a dict keeps: a
+            # request carrying two is ambiguous and is refused (CodeGuard
+            # CG-19). Compared as bytes, so a non-ASCII value is a plain 401
+            # rather than an exception.
+            values = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
+            supplied = values[0] if len(values) == 1 else None
+            if not tokens_match(supplied, f"Bearer {self.token}"):
                 await send(
                     {
                         "type": "http.response.start",
@@ -125,8 +131,20 @@ def main() -> None:
     host, port, path, cert, key = _http_settings()
     import uvicorn
 
-    app = _BearerAuth(server.streamable_http_app(streamable_http_path=path, host=host), token)
-    uvicorn.run(app, host=host, port=port, ssl_certfile=cert, ssl_keyfile=key)
+    # Auth outermost: an unauthenticated caller is refused before any body is
+    # read; then the body budget (CodeGuard CG-15).
+    app = _BearerAuth(
+        BodyLimitMiddleware(server.streamable_http_app(streamable_http_path=path, host=host)),
+        token,
+    )
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        ssl_certfile=cert,
+        ssl_keyfile=key,
+        limit_concurrency=connection_limit(),
+    )
 
 
 if __name__ == "__main__":

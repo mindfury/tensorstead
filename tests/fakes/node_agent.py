@@ -296,9 +296,12 @@ class FakeNodeAgent:
     def stop_deployment(self, deployment_id: str) -> dict[str, Any]:
         if self.unreachable:
             raise ConnectionError("simulated agent unreachable")
-        dep = self.deployments[deployment_id]
-        dep.running = False
-        dep.desired_state = "stopped"
+        # Like the real agent: stopping a deployment this node does not hold is
+        # a no-op success (the engine ignores an absent container).
+        dep = self.deployments.get(deployment_id)
+        if dep is not None:
+            dep.running = False
+            dep.desired_state = "stopped"
         return {"status": "stopped", "deployment_id": deployment_id}
 
     def get_observed(self, deployment_id: str) -> dict[str, Any]:

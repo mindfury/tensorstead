@@ -445,3 +445,24 @@ not running cannot be *told* to start anything either, by a stray automation or
 by an operator agent acting on a stale plan. This estate has had a watcher stop
 a healthy deployment five seconds after it started. "Nothing comes up until a
 human says so" is a posture, and these are its two switches.
+
+## Admission budgets
+
+Every Tensorstead HTTP surface (coordinator, agent and Streamable-HTTP MCP)
+refuses work it can't bound, instead of queueing it:
+
+| Budget | Default | Override | Refusal |
+|---|---|---|---|
+| Request body size | 16 MiB | `TENSORSTEAD_MAX_REQUEST_BYTES` | 413 `request_too_large`, on the declared length or as soon as a chunked body passes it |
+| JSON nesting depth | 64 | — | 400 `invalid_request` |
+| Concurrent background operations (acquire, build, image pull) | 8 | `TENSORSTEAD_MAX_BACKGROUND_OPERATIONS` | 429 `busy`; retry when one finishes |
+| Concurrent connections per server | 64 | `TENSORSTEAD_MAX_CONNECTIONS` (agent: `tensorstead_agent_limit_concurrency`) | 503 |
+
+Health and ordinary reads stay available while background work is saturated.
+**Per-client rate limiting is not done here.** The management plane is
+single-tenant behind one token. If it is ever reachable by more than its
+operators, put a rate-limiting proxy in front of it.
+
+API documentation and the OpenAPI schema are not served unauthenticated. The
+schema is available at `GET /v1/openapi.json` with the management token.
+

@@ -131,7 +131,7 @@ def test_buildx_builds_from_the_same_rendered_dockerfile(
         seen["dockerfile"] = Path(argv[argv.index("--file") + 1]).read_text(encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(docker_py.subprocess, "run", _run)
+    monkeypatch.setattr(docker_py, "_run_capped", _capped(_run))
 
     class _Images:
         def get(self, _ref: str) -> Any:
@@ -182,3 +182,19 @@ def test_build_image_renders_through_the_same_function() -> None:
         entrypoint=["/usr/local/bin/tensorstead-dspark-prepare"],
     )
     assert not any(line.startswith("chmod") for line in _instructions(sent["dockerfile"]))
+
+
+def _capped(run: Any) -> Any:
+    """Adapt a ``subprocess.run`` fake to ``_run_capped``'s (returncode, lines) shape."""
+
+    def inner(argv: list[str], timeout: float) -> tuple[int, list[str]]:
+        done = run(argv, timeout=timeout)
+        lines = [
+            line
+            for stream in (done.stdout, done.stderr)
+            for line in (stream or "").splitlines()
+            if line.strip()
+        ]
+        return done.returncode, lines
+
+    return inner
