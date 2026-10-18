@@ -34,7 +34,7 @@ prohibits — that binds the product's own unprompted behaviour.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -744,23 +744,59 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         )
 
     @server.tool(name="deployment_list")
-    def deployment_list() -> ApiResult:
-        """List declared deployments.
+    def deployment_list(
+        name: Annotated[
+            str | None, Field(description="Case-insensitive substring of the deployment name.")
+        ] = None,
+        model: Annotated[
+            str | None,
+            Field(
+                description="Case-insensitive substring of the source model id "
+                "(e.g. 'GLM-5.3') or the served model name."
+            ),
+        ] = None,
+        desired_state: Annotated[
+            Literal["stopped", "running"] | None,
+            Field(description="Only deployments meant to be running, or stopped."),
+        ] = None,
+        endpoint: Annotated[
+            str | None, Field(description="Case-insensitive substring of host:port.")
+        ] = None,
+        observe: Annotated[
+            bool,
+            Field(
+                description="Also ask the nodes for live state (observed_status). "
+                "Costs a round trip per returned deployment; filter first."
+            ),
+        ] = False,
+    ) -> ApiResult:
+        """Find deployments: one short summary each, filtered.
 
-        ``name`` is a **stable handle chosen at creation, not a description of
-        what is being served.** It is unique, it is what the CLI resolves a
-        deployment by, and there is deliberately no rename: a deployment
-        repointed to a different model keeps its name, the way a host keeps its
-        hostname when it is reimaged.
+        Each entry is ``id``, ``name``, ``desired_state``, revisions,
+        ``source_model_id``, ``served_model_name``, ``runtime_type``,
+        ``endpoint``, ``participating_nodes`` and ``observed_status`` (null
+        unless ``observe``). Full configuration and live per-node state for
+        one deployment: ``deployment_get``. Live state alone:
+        ``deployment_status``.
 
-        So do not read the name as the model. The model currently declared is
-        at ``declared.revision.model.source_model_id``, and what the runtime
-        advertises to clients is
-        ``declared.revision.runtime_config.served_model_name``. Those three can
-        legitimately disagree, and on a deployment that has been repointed they
-        will.
+        To find what serves a model, filter by ``model`` -- not by name. A name
+        is a stable handle chosen at creation (``deployment_rename`` changes
+        it), not a description of what is served. The model declared is
+        ``source_model_id``, and what clients request is
+        ``served_model_name``; the three can legitimately disagree.
         """
-        return client.request("GET", "/v1/deployments")
+        params: dict[str, Any] = {"view": "summary"}
+        for key, value in (
+            ("name", name),
+            ("model", model),
+            ("desired_state", desired_state),
+            ("endpoint", endpoint),
+        ):
+            if value:
+                params[key] = value
+        if observe:
+            params["observe"] = "true"
+        return client.request("GET", "/v1/deployments", params=params)
 
     @server.tool(name="deployment_get")
     def deployment_get(

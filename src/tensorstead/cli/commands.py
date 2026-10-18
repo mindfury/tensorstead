@@ -18,6 +18,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 import httpx
 import typer
@@ -1869,7 +1870,9 @@ def _render_deployment(body: dict) -> None:
 
 
 def _get_deployment(name: str) -> dict:
-    deployments = _call_list("GET", "/v1/deployments")
+    # Narrowed server-side so only the candidates are observed, not the whole
+    # estate; the exact-name match below still decides.
+    deployments = _call_list("GET", f"/v1/deployments?{urlencode({'name': name})}")
     for deployment in deployments:
         declared = deployment.get("declared", deployment)
         if declared.get("name") == name:

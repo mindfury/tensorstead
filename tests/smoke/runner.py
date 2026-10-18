@@ -442,7 +442,12 @@ def _find_deployment(payload: Any, name: str) -> dict[str, Any]:
     if not isinstance(payload, list):
         raise SmokeCheckError("coordinator returned an invalid deployment inventory")
     for deployment in payload:
-        if isinstance(deployment, dict) and deployment.get("declared", {}).get("name") == name:
+        if not isinstance(deployment, dict):
+            continue
+        # REST's default listing nests the name under ``declared``; MCP's
+        # ``deployment_list`` returns summaries with it at the top level.
+        found = deployment.get("declared", {}).get("name") or deployment.get("name")
+        if found == name:
             return deployment
     raise SmokeCheckError(f"deployment {name!r} was not found")
 

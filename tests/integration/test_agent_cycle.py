@@ -105,8 +105,11 @@ def _agent_deploys(server: Any, http: TestClient) -> dict[str, Any]:
             "endpoint": "10.0.0.11:8000",
         },
     )
-    deployments = _call(server, "deployment_list")
-    declared = next(d["declared"] for d in deployments if d["declared"]["name"] == "llama-70b")
+    # Find by model through the summary listing, then read the full record --
+    # the path the tool descriptions steer an agent down.
+    found = _call(server, "deployment_list", {"model": "org/model"})
+    summary = next(d for d in found if d["name"] == "llama-70b")
+    declared = _call(server, "deployment_get", {"deployment_id": summary["id"]})["declared"]
 
     _call(server, "deployment_start", {"deployment_id": declared["id"]})
     return dict(declared)

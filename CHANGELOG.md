@@ -5,6 +5,28 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Changed
+- **`deployment_list` (MCP) returns a short summary per deployment and takes
+  filters.** It returned every deployment's full declared/observed document:
+  ~70 KB for 42 deployments from the API and ~190 KB once MCP carried it as
+  both text and structured content. An agent's harness spilled that to a file,
+  so "which deployment serves model X?" could not be answered with the tools
+  alone. It now returns `id`, `name`, `desired_state`, revisions,
+  `source_model_id`, `served_model_name`, `runtime_type`, `endpoint`,
+  `participating_nodes` and `observed_status`, about 770 bytes each, and takes
+  `name`, `model`, `desired_state`, `endpoint` and `observe`. The full record is
+  still `deployment_get`. Its description no longer says that deployments
+  cannot be renamed.
+- **`GET /v1/deployments` takes the same filters, plus `view=summary`.** The
+  default stays the full document, so existing callers are unchanged. Filters
+  apply before any node is asked, so a filtered listing observes only the
+  deployments it returns. An unfiltered full listing observes all of them
+  (~3 s for 42). Summaries observe nothing unless `observe=true`.
+- **CLI lookups by name ask only for that deployment.** Commands that resolve a
+  deployment by name used to fetch and observe every deployment.
+
 ## [1.7.0] - 2026-10-17
 
 ### Security

@@ -383,6 +383,33 @@ class DeploymentObserved(ClientContractModel):
     detail: str | None = None
 
 
+class DeploymentSummary(ClientContractModel):
+    """One deployment in a few hundred bytes: enough to find it, not to audit it.
+
+    ``GET /v1/deployments?view=summary``. The full document (runtime config,
+    image, per-node observation) is ``GET /v1/deployments/{id}``. A list of
+    full documents grew to ~70 KB for 42 deployments -- more than an agent's
+    context accepts in one tool result, so the natural "find the deployment
+    serving model X" query could not be answered without leaving the tools.
+
+    ``observed_status`` is ``None`` unless the caller asked for observation
+    (``observe=true``): observing means asking every participating node, and a
+    listing should not cost one round trip per deployment by default.
+    """
+
+    id: str
+    name: str
+    desired_state: Literal["stopped", "running"]
+    current_revision: int
+    running_revision: int | None = None
+    source_model_id: str
+    served_model_name: str | None = None
+    runtime_type: str
+    endpoint: str | None = None
+    participating_nodes: list[str] = Field(default_factory=list)
+    observed_status: Literal["running", "not_running", "unknown", "unreachable"] | None = None
+
+
 class DeploymentResponse(ClientContractModel):
     """Declared + observed, never merged.
 

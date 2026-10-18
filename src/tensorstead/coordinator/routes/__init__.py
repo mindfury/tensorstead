@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
@@ -32,6 +32,7 @@ from tensorstead.contracts.api import (
     DeploymentResponse,
     DeploymentRuntimeResponse,
     DeploymentStatusResponse,
+    DeploymentSummary,
     ImageArchiveImportRequest,
     ImageBuildRequest,
     ImagePullRequest,
@@ -955,12 +956,107 @@ def create_deployment(
 
 @router.get(
     "/deployments",
-    response_model=list[DeploymentResponse],
+    response_model=list[DeploymentResponse] | list[DeploymentSummary],
     dependencies=[Depends(require_auth_dep)],
 )
-def list_deployments(request: Request) -> list[DeploymentResponse]:
-    deployments = _deployments_service(request).list()
-    return [_deployment_response(request, d.id) for d in deployments]
+def list_deployments(
+    request: Request,
+    view: Annotated[
+        Literal["full", "summary"],
+        Query(
+            description="full: the declared/observed document per deployment. "
+            "summary: a few identifying fields; details via GET /deployments/{id}."
+        ),
+    ] = "full",
+    name: Annotated[
+        str | None, Query(max_length=256, description="Case-insensitive substring of the name.")
+    ] = None,
+    model: Annotated[
+        str | None,
+        Query(
+            max_length=256,
+            description="Case-insensitive substring of the source model id or served model name.",
+        ),
+    ] = None,
+    desired_state: Annotated[Literal["stopped", "running"] | None, Query()] = None,
+    endpoint: Annotated[
+        str | None, Query(max_length=256, description="Case-insensitive substring of the endpoint.")
+    ] = None,
+    observe: Annotated[
+        bool,
+        Query(
+            description="summary only: ask the nodes for live state (observed_status). "
+            "view=full always observes."
+        ),
+    ] = False,
+) -> list[DeploymentResponse] | list[DeploymentSummary]:
+    """Deployments, filtered before anything is observed.
+
+    Filters narrow on the declared record, so a filtered listing asks the nodes
+    about only the deployments it returns. With every deployment observed live,
+    an unfiltered full listing of 42 deployments took ~3 s and ~70 KB.
+    """
+    service = _deployments_service(request)
+    selected = []
+    for deployment in service.list():
+        revision = service.get_revision(deployment.id, deployment.current_revision)
+        if _deployment_matches(deployment, revision, name, model, desired_state, endpoint):
+            selected.append((deployment, revision))
+
+    if view == "full":
+        return [_deployment_response(request, d.id) for d, _ in selected]
+
+    observation = _observation_service(request) if observe else None
+    summaries: list[DeploymentSummary] = []
+    for deployment, revision in selected:
+        observed_status = None
+        if observation is not None:
+            _, _, observed_dict, _ = observation.observe(deployment.id)
+            observed_status = _build_observed(observed_dict).status
+        summaries.append(
+            DeploymentSummary(
+                id=deployment.id,
+                name=deployment.name,
+                desired_state=deployment.desired_state,
+                current_revision=deployment.current_revision,
+                running_revision=deployment.running_revision,
+                source_model_id=revision.source_model_id,
+                served_model_name=_served_model_name(revision.runtime_config),
+                runtime_type=revision.runtime_type,
+                endpoint=revision.endpoint,
+                participating_nodes=list(revision.participating_nodes),
+                observed_status=observed_status,
+            )
+        )
+    return summaries
+
+
+def _served_model_name(runtime_config: dict[str, Any]) -> str | None:
+    value = runtime_config.get("served_model_name")
+    return str(value) if value else None
+
+
+def _deployment_matches(
+    deployment: Any,
+    revision: Any,
+    name: str | None,
+    model: str | None,
+    desired_state: str | None,
+    endpoint: str | None,
+) -> bool:
+    def contains(haystack: object, needle: str) -> bool:
+        return needle.casefold() in str(haystack or "").casefold()
+
+    if name and not contains(deployment.name, name):
+        return False
+    if model and not (
+        contains(revision.source_model_id, model)
+        or contains(_served_model_name(revision.runtime_config), model)
+    ):
+        return False
+    if desired_state and deployment.desired_state != desired_state:
+        return False
+    return not (endpoint and not contains(revision.endpoint, endpoint))
 
 
 @router.get(
