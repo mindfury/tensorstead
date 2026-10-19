@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.8.1] - 2026-10-19
 
 ### Fixed
 - **Peer model replication preserves the complete digested tree.** Empty
@@ -14,6 +14,11 @@ is versioned separately (`stead status` reports both).
   archive now includes each directory and file once and writes hardlinked
   files as independent regular entries. Symlinks and special files are refused
   before serving, matching the digest and extraction rules.
+
+### Dependencies
+- `types-pyyaml` 6.0.12.20260724 → 6.0.12.20260906 (type stubs, development
+  only).
+- Build backend range widened to `uv_build>=0.8,<0.14`.
 
 ## [1.8.0] - 2026-10-18
 
@@ -479,6 +484,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.8.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.1
 [1.8.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.0
 [1.7.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.7.0
 [1.6.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.6.0
