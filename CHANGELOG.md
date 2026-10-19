@@ -5,6 +5,16 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Fixed
+- **Peer model replication preserves the complete digested tree.** Empty
+  directories were omitted from the archive, causing digest mismatches, and
+  hardlinked regular files became tar links that the receiver refused. The
+  archive now includes each directory and file once and writes hardlinked
+  files as independent regular entries. Symlinks and special files are refused
+  before serving, matching the digest and extraction rules.
+
 ## [1.8.0] - 2026-10-18
 
 ### Changed

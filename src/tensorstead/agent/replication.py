@@ -536,9 +536,18 @@ class PeerReplicationService:
         memory, not time-to-first-byte, and this removes it completely.
         """
         with tempfile.TemporaryFile(dir=path.parent) as buffer:
-            with tarfile.open(fileobj=buffer, mode="w") as tar:
-                for item in sorted(p for p in path.rglob("*") if p.is_file()):
-                    tar.add(item, arcname=str(item.relative_to(path)))
+            # The digest includes directories, even empty ones. Hardlinked
+            # regular files also count independently; serialize their bytes
+            # rather than emitting links, which the receiver refuses.
+            with tarfile.open(fileobj=buffer, mode="w", dereference=True) as tar:
+                for item in sorted(path.rglob("*")):
+                    mode = item.lstat().st_mode
+                    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                        raise UnsupportedTreeEntry(
+                            f"{item.relative_to(path).as_posix()!r} is neither a regular file "
+                            f"nor a directory; model trees hold only those"
+                        )
+                    tar.add(item, arcname=str(item.relative_to(path)), recursive=False)
             buffer.seek(0)
             while chunk := buffer.read(_CHUNK):
                 yield chunk

@@ -11,6 +11,7 @@ may write.
 from __future__ import annotations
 
 import io
+import os
 import tarfile
 import tempfile
 from pathlib import Path
@@ -20,7 +21,12 @@ import pytest
 
 from tensorstead.agent import replication as replication_module
 from tensorstead.agent.acquisition import ModelAcquisitionService
-from tensorstead.agent.replication import PeerReplicationService, ReplicationError
+from tensorstead.agent.replication import (
+    PeerReplicationService,
+    ReplicationError,
+    UnsupportedTreeEntry,
+    directory_digest,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -64,6 +70,58 @@ def test_stream_archive_round_trips_directory_contents(tmp_path: Path) -> None:
         weights_member = tar.extractfile("weights.bin")
         assert config_member is not None and config_member.read() == b'{"a": 1}'
         assert weights_member is not None and weights_member.read() == b"\x00\x01" * 10_000
+
+
+@pytest.mark.parametrize("shape", ["empty_directories", "hardlinked_files", "nested_files"])
+def test_stream_archive_replicates_the_complete_digested_tree(tmp_path: Path, shape: str) -> None:
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "config.json").write_bytes(b"{}")
+    if shape == "empty_directories":
+        (source / "empty").mkdir()
+        (source / "nested" / "empty").mkdir(parents=True)
+    elif shape == "hardlinked_files":
+        (source / "config-copy.json").hardlink_to(source / "config.json")
+    else:
+        (source / "nested" / "deeper").mkdir(parents=True)
+        (source / "nested" / "deeper" / "weights.bin").write_bytes(b"weights")
+
+    acquisition = _acquisition(tmp_path)
+    sender = PeerReplicationService(acquisition=acquisition)
+    payload = b"".join(sender.stream_archive(source))
+    receiver = PeerReplicationService(acquisition=acquisition, peer_client=_FakePeer([payload]))
+    expected = directory_digest(source)
+
+    outcome = receiver.replicate(
+        model_id="m1", content_digest=expected, source_endpoint="https://peer"
+    )
+
+    assert outcome.state == "available"
+    assert outcome.content_digest == expected
+    assert directory_digest(acquisition.local_path("m1")) == expected
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tar:
+        names = [member.name for member in tar.getmembers()]
+    assert len(names) == len(set(names)), "each tree entry must be archived only once"
+
+
+@pytest.mark.parametrize("kind", ["file_link", "directory_link", "fifo"])
+def test_stream_archive_refuses_entries_the_digest_cannot_describe(
+    tmp_path: Path, kind: str
+) -> None:
+    source = tmp_path / "model"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"must not be served")
+    if kind == "fifo":
+        os.mkfifo(source / "unsupported")
+    else:
+        target = outside / "secret" if kind == "file_link" else outside
+        (source / "unsupported").symlink_to(target)
+    service = PeerReplicationService(acquisition=_acquisition(tmp_path))
+
+    with pytest.raises(UnsupportedTreeEntry):
+        b"".join(service.stream_archive(source))
 
 
 def test_stream_archive_builds_its_buffer_on_the_model_s_own_filesystem(
