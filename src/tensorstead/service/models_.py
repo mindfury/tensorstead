@@ -247,6 +247,17 @@ class ModelService:
         # later node prefers pulling from it over a second upstream download.
         replicas: list[ModelReplica] = []
         holder: str | None = None
+        # A verified replica on a node this request does not name is still the
+        # estate's copy. Without this, asking for one more node -- ``nodes=[new]``
+        # -- found no holder among the nodes named, and fetched the whole model
+        # from upstream again while a peer two metres away held it: measured on
+        # the estate as a 70 GB Super VL download beside its own replica.
+        if revision is not None:
+            holder = self._holder_elsewhere(
+                source_id, source_model_id, requested_revision, nodes, file_selector
+            )
+            if holder is not None:
+                resolved = requested_revision
         for node_id in nodes:
             existing = (
                 self._verified_replica_at(
@@ -552,6 +563,29 @@ class ModelService:
             verified_at=datetime.now().astimezone() if state == ReplicaState.AVAILABLE else None,
         )
         self._repo.save_replica(replica)
+
+    def _holder_elsewhere(
+        self,
+        source_id: str,
+        source_model_id: str,
+        revision: str | None,
+        requested: list[str],
+        file_selector: tuple[str, ...] = (),
+    ) -> str | None:
+        """A node outside ``requested`` holding a verified replica, if any.
+
+        Chosen in a stable order, so the same estate gives the same source.
+        """
+        model = self._repo.find_model(source_id, source_model_id, revision, file_selector)
+        if model is None:
+            return None
+        named = set(requested)
+        holders = sorted(
+            replica.node_id
+            for replica in self._repo.list_replicas(model.id)
+            if replica.state == ReplicaState.AVAILABLE and replica.node_id not in named
+        )
+        return holders[0] if holders else None
 
     def _verified_replica_at(
         self,

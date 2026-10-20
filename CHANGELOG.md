@@ -38,6 +38,17 @@ is versioned separately (`stead status` reports both).
 - `SchemaProbe.script` may be `None`, for a runtime that reports its own
   surface without a probe script.
 
+### Fixed
+- **Adding a node to a model already on the estate copies it instead of
+  downloading it again.** `acquire` looked for an existing replica only among
+  the nodes named in the request, so `nodes=[new node]` found no source and
+  fetched the whole checkpoint from upstream while another node held a verified
+  copy. Measured on the estate: ~70 GB of Nemotron Super VL downloaded to
+  spark-6d42 beside spark-471b's replica. A verified replica on any node now
+  serves as the source, and when that copy cannot be made the acquire is
+  refused (`replication_failed`) instead of downloading again, as for a holder
+  named in the request.
+
 ## [1.8.2] - 2026-10-19
 
 ### Dependencies
