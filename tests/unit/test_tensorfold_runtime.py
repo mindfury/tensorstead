@@ -58,6 +58,7 @@ def test_single_node_publishes_8080_over_bridge_networking() -> None:
     requirements = _A.container_requirements({})
     assert requirements.api_port == 8080
     assert requirements.network_mode is None
+    assert requirements.ipc_mode is None
     assert requirements.serves_inference
     assert requirements.environment == {"TENSORFOLD_NO_UPDATE_CHECK": "1"}
 
@@ -188,6 +189,7 @@ def test_each_rank_is_told_its_position_for_both_families(index: int) -> None:
     assert env["NCCL_COMM_ID"] == "10.100.89.1:29741", "rank 0's fabric address"
     assert env["NCCL_SOCKET_IFNAME"] == "enP2p1s0f0np0"
     assert requirements.network_mode == "host"
+    assert requirements.ipc_mode == "host", "64 MB of /dev/shm failed the first all-gather"
     assert requirements.devices == ["/dev/infiniband"]
     assert requirements.capabilities == ["IPC_LOCK"]
     assert requirements.ulimits == {"memlock": (-1, -1)}

@@ -291,6 +291,10 @@ class TensorFoldAdapter:
             environment=environment,
             model_references=references,
             network_mode="host",
+            # The collective library's proxy keeps its buffers in shared memory;
+            # in Docker's default 64 MB the first all-gather failed with
+            # "unhandled system error" on the estate, and formed with the host's.
+            ipc_mode="host",
             devices=["/dev/infiniband"],
             capabilities=["IPC_LOCK"],
             ulimits={"memlock": (-1, -1)},
