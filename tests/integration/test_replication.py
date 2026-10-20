@@ -199,6 +199,57 @@ def test_adding_a_third_node_replicates_rather_than_refetching(
     assert agent_c.replication_pulls[0]["from_node"] == node_a
 
 
+def test_asking_for_only_the_new_node_replicates_from_an_existing_holder(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    """``nodes=[new]`` copies from a holder the request does not name.
+
+    Measured on the estate: a replica of a model held on spark-471b, requested
+    for spark-6d42 alone, downloaded the whole checkpoint from upstream again,
+    because only the nodes named were considered as sources.
+    """
+    client, node_a, node_b, agent_a, agent_b = two_nodes
+    _acquire(client, [node_a])
+    assert agent_a.acquisition_calls == 1
+
+    _acquire(client, [node_b])
+
+    assert agent_b.acquisition_calls == 0, "the new node fetched from upstream again"
+    assert len(agent_b.replication_pulls) == 1
+    assert agent_b.replication_pulls[0]["from_node"] == node_a
+    models = client.get("/v1/models", headers=_AUTH).json()
+    model = next(m for m in models if m["source_model_id"] == "org/model")
+    assert {r["node_id"]: r["state"] for r in model["replicas"]} == {
+        node_a: "available",
+        node_b: "available",
+    }
+
+
+def test_a_holder_elsewhere_that_cannot_copy_refuses_rather_than_refetching(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    """The fetch-once rule applies to a holder found outside the request too."""
+    client, node_a, node_b, _agent_a, agent_b = two_nodes
+    _acquire(client, [node_a])
+    agent_b.replication_unavailable = True
+
+    resp = client.post(
+        "/v1/models:acquire",
+        json={
+            "source_id": "huggingface",
+            "source_model_id": "org/model",
+            "revision": "e1f2a3b",
+            "nodes": [node_b],
+        },
+        headers=_AUTH,
+    )
+    operation = poll_operation(client, resp.json()["operation_id"])
+
+    assert agent_b.acquisition_calls == 0, "a failed copy must not become a second download"
+    assert operation["state"] == "failed"
+    assert "replication_failed" in json.dumps(operation)
+
+
 def test_no_model_byte_transits_the_coordinator(
     two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
 ) -> None:
