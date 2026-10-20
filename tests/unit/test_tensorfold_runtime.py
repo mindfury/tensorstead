@@ -194,6 +194,41 @@ def test_each_rank_is_told_its_position_for_both_families(index: int) -> None:
     assert requirements.serves_inference is (index == 0)
 
 
+def test_a_hostname_for_rank_0_is_resolved_to_an_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TensorFold refuses a hostname rendezvous (``NoCommId``, measured on the estate)."""
+    import socket
+
+    def resolve(host: str, *_a: object, **_k: object) -> list[tuple[object, ...]]:
+        assert host == "spark-6d42.internal"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.100.89.2", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    position = NodePosition(
+        node_index=1,
+        node_count=2,
+        self_address="spark-471b.internal",
+        peer_addresses=["spark-6d42.internal", "spark-471b.internal"],
+    )
+    env = _A.container_requirements({"distributed_interface": "x"}, position).environment
+    assert env["NCCL_COMM_ID"] == "10.100.89.2:29741"
+
+
+def test_an_unresolvable_rank_0_refuses_rather_than_guessing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import socket
+
+    def fail(*_a: object, **_k: object) -> None:
+        raise socket.gaierror("no such host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
+    position = NodePosition(
+        node_index=1, node_count=2, self_address="b", peer_addresses=["nowhere.invalid", "b"]
+    )
+    with pytest.raises(ValueError, match="does not resolve"):
+        _A.container_requirements({"distributed_interface": "x"}, position)
+
+
 def test_rank_0_serves_on_the_deployment_port_and_rank_1_serves_nothing(tmp_path: Path) -> None:
     model = str(_model(tmp_path / "m"))
     config = {"served_model_name": "super", "context": 16384, "distributed_interface": "x"}

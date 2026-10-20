@@ -31,7 +31,9 @@ last -- is the order TensorFold's recipe asks for.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypeGuard
 
@@ -164,6 +166,30 @@ def _config(config: dict[str, Any] | None) -> TensorFoldConfig:
     return TensorFoldConfig(**(config or {}))
 
 
+def _ipv4(address: str) -> str:
+    """``address`` as an IPv4 literal, resolved on this node.
+
+    TensorFold parses the rendezvous variable itself and accepts only an
+    address -- ``spark-6d42.internal:29741`` failed both ranks with
+    ``NoCommId`` on the estate, where ``10.100.89.2:29741`` formed the group.
+    The product's peer addresses are the agents' endpoint hosts, which on this
+    estate's nodes resolve to their fabric addresses; resolving here, on the
+    agent, asks the node's own resolver, the one the ranks will use.
+    """
+    try:
+        return str(ipaddress.IPv4Address(address))
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(address, None, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(
+            f"rank 0's address {address!r} does not resolve to IPv4 on this node; "
+            f"TensorFold's rendezvous needs an address"
+        ) from exc
+    return str(infos[0][4][0])
+
+
 def _spans_nodes(position: NodePosition | None) -> TypeGuard[NodePosition]:
     return position is not None and position.node_count > 1
 
@@ -257,7 +283,7 @@ class TensorFoldAdapter:
         for index_variable, count_variable in _POSITION_VARIABLES:
             environment[index_variable] = str(position.node_index)
             environment[count_variable] = str(position.node_count)
-        environment[_RENDEZVOUS_VARIABLE] = f"{head}:{_RENDEZVOUS_PORT}"
+        environment[_RENDEZVOUS_VARIABLE] = f"{_ipv4(head)}:{_RENDEZVOUS_PORT}"
         if validated.distributed_interface:
             environment[_INTERFACE_VARIABLE] = validated.distributed_interface
         return ContainerRequirements(
