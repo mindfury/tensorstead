@@ -287,3 +287,50 @@ TabbyAPI parses its arguments; whether it loads a model is the deployment's
 first start. Serve an EXL3 model (`turboderp/Qwen3-8B-exl3`, for example, at
 a pinned `4.0bpw` revision); EXL2 and GPTQ are refused before the container
 starts.
+
+#### TensorFold
+
+[TensorFold](https://github.com/ashhart/TensorFold) publishes a native
+`linux-aarch64` binary rather than an image. It needs glibc, the driver's
+`libcuda` and, for a two-node group, NCCL and the CUDA 13 runtime. The base below
+is the CUDA 13 image the estate already holds for vLLM, so the build downloads
+only the 23 MB release. The archive's SHA-256 is written into the step, so a
+different file fails the build.
+
+```sh
+stead buildspec set tensorfold-1.1.1 \
+  --base 'eugr/spark-vllm-b12x@sha256:03a956544e9f9b4b7ba91690469fbe7848bdbef29a7d2e0f5788368467bb3595' \
+  --step 'curl -fsSL -o /tmp/tf.tar.gz https://github.com/ashhart/TensorFold/releases/download/v1.1.1/tensorfold-1.1.1-linux-aarch64.tar.gz && echo "2e0103a544e64354bfec65bd8a052ede17aa9be1f6a56d8e37c868af9139cb39  /tmp/tf.tar.gz" | sha256sum -c - && mkdir -p /opt/tensorfold && tar -xzf /tmp/tf.tar.gz -C /opt/tensorfold --strip-components=1 && rm /tmp/tf.tar.gz && ln -s /opt/tensorfold/bin/tensorfold-native /usr/local/bin/tensorfold-native' \
+  --step 'test "$(tensorfold-native --version)" = "tensorfold-native 1.1.1"' \
+  --entrypoint tensorfold-native
+stead image build tensorfold-1.1.1 --node spark-alpha.internal --node spark-beta.internal \
+  --reference local/tensorfold:1.1.1-cuda13
+```
+
+A deployment then uses `runtime_type: tensorfold` and that image. The adapter
+runs `tensorfold-native serve <model directory>`. It delivers the inference key
+as `TENSORFOLD_API_KEY` and probes `/v1/models` for readiness. The model is
+NVIDIA's NVFP4 export or another checkpoint TensorFold lists for CUDA. Its
+README's model table is the authority; not every family it serves on Metal
+has a CUDA path.
+
+**Two nodes.** For the families TensorFold runs as a group on CUDA (Nemotron
+Super VL, GLM-5.3-Flash), declare both nodes and `distributed_interface`, the
+ConnectX-7 port. Every node needs the same checkpoint, because each rank hashes
+its copy and the group refuses to serve if they differ. Rank 1 serves no API.
+
+What the estate measured with 1.1.1, on the same stored checkpoints and
+requests as the vLLM deployments it was compared with:
+
+| Model (NVFP4) | Nodes | TensorFold decode | vLLM decode | Prefill (TF / vLLM) | Load (TF / vLLM) |
+| --- | --- | --- | --- | --- | --- |
+| Nemotron 3.5 Lightning 30B-A3B | 1 | 140 tok/s | 103 (MTP-1) | 8,190 / 6,980 tok/s | 14 s / 176 s |
+| Nemotron 3.5 Super VL 120B-A12B | 1 | 50 tok/s | 48 (DFlash-7) | 2,340 / 2,740 tok/s | 65 s / 536 s |
+| Nemotron 3.5 Super VL 120B-A12B | 2 | 61 tok/s | — | 1,350 tok/s | 300 s |
+| Nemotron 3.5 Bolt 74B-A9B | 1 | 39 tok/s | 81 (DFlash) | 2,550 / 1,510 tok/s | 8 s / 227 s |
+
+Bolt is the counter-example. TensorFold has no drafter for it, so vLLM's DFlash
+wins single-stream decode by 2×. TensorFold's greedy output was identical
+across repeats in every run. With eight concurrent requests it reached 262 tok/s
+in total on Lightning, 90 on Super VL (one node), 125 on Super VL (two nodes)
+and 151 on Bolt.

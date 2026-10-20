@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+from tensorstead.adapters.runtimes.tensorfold import TensorFoldAdapter
 from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 from tensorstead.agent.routes.deployments import _refuse_if_credential_cannot_be_enforced
@@ -109,3 +110,10 @@ def test_a_bound_key_is_still_refused_where_it_cannot_be_enforced() -> None:
             SGLangAdapter(), "bound-key", node_default="node-key"
         )
     assert caught.value.detail["code"] == "credential_not_enforceable"  # type: ignore[index]
+
+
+def test_tensorfold_enforces_a_supplied_credential() -> None:
+    """``TENSORFOLD_API_KEY`` is read by the binary (its ``capabilities --json``)."""
+    adapter = TensorFoldAdapter()
+    _refuse_if_credential_cannot_be_enforced(adapter, "some-secret")
+    assert adapter.inference_credential_env("some-secret") == {"TENSORFOLD_API_KEY": "some-secret"}
