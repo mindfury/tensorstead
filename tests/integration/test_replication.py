@@ -250,6 +250,89 @@ def test_a_holder_elsewhere_that_cannot_copy_refuses_rather_than_refetching(
     assert "replication_failed" in json.dumps(operation)
 
 
+def _model_id(client: TestClient) -> str:
+    models = client.get("/v1/models", headers=_AUTH).json()
+    return str(next(m["id"] for m in models if m["source_model_id"] == "org/model"))
+
+
+def _digest(client: TestClient, model_id: str, **body: object) -> dict:
+    resp = client.post(f"/v1/models/{model_id}:digest", json=body, headers=_AUTH)
+    assert resp.status_code == 202, resp.text
+    return dict(poll_operation(client, resp.json()["operation_id"]))
+
+
+def test_a_pre_digest_model_is_digested_then_copied_not_downloaded_again(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    """The estate's Bolt case, end to end: refused, digested, then copied."""
+    client, node_a, node_b, agent_a, agent_b = two_nodes
+    agent_a.report_digest_on_acquire = False
+    _acquire(client, [node_a])
+    model_id = _model_id(client)
+
+    resp = client.post(
+        "/v1/models:acquire",
+        json={
+            "source_id": "huggingface",
+            "source_model_id": "org/model",
+            "revision": "e1f2a3b",
+            "nodes": [node_b],
+        },
+        headers=_AUTH,
+    )
+    refused = poll_operation(client, resp.json()["operation_id"])
+    assert "no content digest" in json.dumps(refused)
+
+    digested = _digest(client, model_id)
+    assert digested["state"] == "succeeded"
+    outcome = digested["per_node_outcomes"][node_a]
+    assert outcome["outcome"] == "recorded"
+    assert agent_a.digest_calls == ["huggingface:org/model"]
+    model = client.get(f"/v1/models/{model_id}", headers=_AUTH).json()
+    assert model["size_bytes"] == 4321
+
+    _acquire(client, [node_b])
+    assert agent_b.acquisition_calls == 0, "digested, so copied rather than downloaded"
+    assert agent_b.replication_pulls[-1]["from_node"] == node_a
+    assert agent_b.replication_pulls[-1]["content_digest"] == "sha256:fake-digest"
+
+
+def test_a_recorded_digest_is_verified_not_overwritten(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    client, node_a, _node_b, agent_a, _agent_b = two_nodes
+    _acquire(client, [node_a])
+    model_id = _model_id(client)
+
+    assert _digest(client, model_id)["per_node_outcomes"][node_a]["outcome"] == "verified"
+
+    agent_a.computed_digest = "sha256:changed-on-disk"
+    failed = _digest(client, model_id)
+    assert failed["state"] == "failed"
+    assert "digest_mismatch" in json.dumps(failed)
+    # The record kept the original: back to the original bytes, it verifies.
+    agent_a.computed_digest = "sha256:fake-digest"
+    assert _digest(client, model_id)["per_node_outcomes"][node_a]["outcome"] == "verified"
+
+
+def test_a_node_without_the_replica_is_refused(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    client, node_a, node_b, _agent_a, _agent_b = two_nodes
+    _acquire(client, [node_a])
+    failed = _digest(client, _model_id(client), node_id=node_b)
+    assert failed["state"] == "failed"
+    assert "holds no available replica" in json.dumps(failed)
+
+
+def test_an_unknown_model_is_refused_before_any_operation(
+    two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
+) -> None:
+    client = two_nodes[0]
+    resp = client.post("/v1/models/no-such-model:digest", json={}, headers=_AUTH)
+    assert resp.status_code == 404
+
+
 def test_no_model_byte_transits_the_coordinator(
     two_nodes: tuple[TestClient, str, str, FakeNodeAgent, FakeNodeAgent],
 ) -> None:

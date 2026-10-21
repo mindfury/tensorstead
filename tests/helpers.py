@@ -170,6 +170,23 @@ class FakeNodeClient:
                 detail=exc.detail,
             ) from exc
 
+    def digest_model(
+        self,
+        node: Node,
+        *,
+        source_id: str,
+        source_model_id: str,
+        file_selector: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        try:
+            return self._for(node).digest_model(
+                source_id=source_id, source_model_id=source_model_id, file_selector=file_selector
+            )
+        except LookupError as exc:
+            raise AgentCallError(
+                code="replica_not_found", message=str(exc), node_id=node.id, detail={}
+            ) from exc
+
     def replicate_model(
         self,
         node: Node,

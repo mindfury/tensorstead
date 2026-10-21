@@ -146,6 +146,28 @@ def register_tools(server: Any, client: CoordinatorClient) -> None:
         return client.request("GET", "/v1/runtimes")
 
     # ----------------------------------------------------------------- models
+    @server.tool(name="model_digest")
+    def model_digest(
+        model_id: Annotated[str, Field(description="Model id from model_list.")],
+        node_id: Annotated[
+            str | None,
+            Field(description="Node whose replica to digest; omitted, the first holder."),
+        ] = None,
+    ) -> ApiResult:
+        """Compute and record a replica's content digest, so it can be copied verified.
+
+        A model acquired before downloads were digested has none, and
+        ``model_acquire`` onto another node then refuses with
+        ``replication_failed`` ("no content digest is recorded") rather than
+        downloading it again. Run this once, then repeat the acquire: the copy
+        goes node to node and is verified. Returns an operation id; hashing a
+        large model takes minutes, so poll ``operation_get`` to terminal. A
+        model that already has a digest is verified, never overwritten
+        (``digest_mismatch`` if the bytes no longer match).
+        """
+        body = {"node_id": node_id} if node_id else {}
+        return client.request("POST", f"/v1/models/{model_id}:digest", json=body)
+
     @server.tool(name="model_acquire")
     def model_acquire(
         source_id: Annotated[str, Field(description="Model source id, e.g. huggingface.")],

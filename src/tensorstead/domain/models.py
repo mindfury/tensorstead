@@ -48,6 +48,7 @@ class OperationState(enum.StrEnum):
 class OperationKind(enum.StrEnum):
     MODEL_ACQUIRE = "model_acquire"
     MODEL_REPLICATE = "model_replicate"
+    MODEL_DIGEST = "model_digest"
     IMAGE_ACQUIRE = "image_acquire"
     # A build produces an image; an acquire fetches one. Distinct kinds because
     # they are distinct verbs, and because an operator reading history needs to

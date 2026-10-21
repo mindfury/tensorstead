@@ -39,6 +39,7 @@ from tensorstead.contracts.api import (
     InferenceCredentialBindRequest,
     InferenceCredentialSetRequest,
     ModelAcquireRequest,
+    ModelDigestRequest,
     ModelReplica,
     ModelResponse,
     NodeRegisterRequest,
@@ -733,6 +734,58 @@ def _run_acquire(
         )
         if admission is not None:
             admission.release()
+
+
+@router.post(
+    "/models/{model_id}:digest",
+    response_model=OperationAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_auth_dep)],
+)
+async def digest_model(
+    model_id: str, request: Request, payload: ModelDigestRequest | None = None
+) -> OperationAcceptedResponse:
+    """Compute and record a replica's digest, so the model can be copied verified.
+
+    Models acquired before downloads were digested cannot be replicated, and
+    a second download was the only way to place them on another node. Hashing
+    reads the whole tree, so this runs as an operation; poll it to terminal.
+    """
+    models_service = _models_service(request)
+    models_service.get(model_id)  # an unknown id is refused now, not in the background
+    operations = request.app.state.operations_service
+    operation = operations.begin(
+        kind=OperationKind.MODEL_DIGEST, target_type="model", target_id=model_id
+    )
+    admission = request.app.state.work_admission
+    admission.admit("this model digest")
+    operations.mark_running(operation.id)
+    node_id = payload.node_id if payload is not None else None
+    asyncio.get_running_loop().run_in_executor(
+        None, _run_digest, models_service, operations, operation.id, model_id, node_id, admission
+    )
+    return OperationAcceptedResponse(operation_id=operation.id)
+
+
+def _run_digest(
+    models_service: Any,
+    operations: Any,
+    operation_id: str,
+    model_id: str,
+    node_id: str | None,
+    admission: Any,
+) -> None:
+    """Run a digest to terminal; every outcome lands on the operation."""
+    try:
+        result = models_service.digest(model_id, node_id)
+        operations.succeed(operation_id, per_node_outcomes={result["node_id"]: result})
+    except Exception as exc:
+        try:
+            _record_failure(operations, operation_id, exc, default_code="model_digest_failed")
+        except Exception:
+            operations.fail(operation_id, code="model_digest_failed", message=str(exc))
+    finally:
+        admission.release()
 
 
 @router.get(

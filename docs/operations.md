@@ -482,3 +482,27 @@ operators, put a rate-limiting proxy in front of it.
 API documentation and the OpenAPI schema are not served unauthenticated. The
 schema is available at `GET /v1/openapi.json` with the management token.
 
+
+## Copying a model to another node
+
+`stead model acquire` names the nodes that should hold a model. The model is
+fetched from its source once. Every other node copies it from a node that
+already holds a verified replica, over the agents' own connection, and checks
+the copy against the recorded content digest. A copy that cannot be made is
+refused (`replication_failed`). It is never quietly downloaded again;
+`--allow-upstream-fallback` is the explicit way to permit that.
+
+Models acquired before downloads were digested carry no digest, so a copy of
+one is refused with "no content digest is recorded to verify a copy against".
+Record one first, then repeat the acquire:
+
+```sh
+stead model digest nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB
+stead operation show <operation id>       # hashing reads the whole tree: minutes
+stead model acquire huggingface nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB \
+  --revision <revision> --node spark-471b.internal
+```
+
+The digest also records the model's size. A model that already has a digest
+is verified rather than overwritten. If the bytes no longer match,
+`digest_mismatch` reports both values and leaves the record as it was.

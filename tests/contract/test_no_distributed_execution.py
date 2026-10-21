@@ -64,6 +64,9 @@ _SANCTIONED_AGENT_PATHS = {
     "/agent/v1/resources",
     "/agent/v1/models",
     "/agent/v1/models:acquire",
+    # Hashes a replica the node already holds and returns only the digest and
+    # size; it moves no model bytes, between nodes or anywhere else.
+    "/agent/v1/models:digest",
     "/agent/v1/models/{model_id}",
     "/agent/v1/deployments",
     "/agent/v1/deployments/{deployment_id}",

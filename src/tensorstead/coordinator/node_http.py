@@ -288,6 +288,22 @@ class NodeHTTPClient:
             timeout=3600.0,
         )
 
+    def digest_model(
+        self,
+        node: Node,
+        *,
+        source_id: str,
+        source_model_id: str,
+        file_selector: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Have ``node`` digest a replica it holds; hashing 170 GB takes minutes."""
+        payload = {
+            "source_id": source_id,
+            "source_model_id": source_model_id,
+            "file_selector": list(file_selector),
+        }
+        return self._call(node, "POST", "/agent/v1/models:digest", json=payload, timeout=3600.0)
+
     def replicate_model(
         self,
         node: Node,

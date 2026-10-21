@@ -148,6 +148,12 @@ class ImagePullRequest(ClientContractModel):
     nodes: list[str]
 
 
+class ModelDigestRequest(ClientContractModel):
+    """Which node's replica to digest; omitted, the first holder is used."""
+
+    node_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
+
+
 class ModelAcquireRequest(ClientContractModel):
     source_id: str
     source_model_id: str

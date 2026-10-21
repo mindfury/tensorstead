@@ -61,6 +61,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "concurrent_modification": 409,
     "acquisition_in_progress": 409,
     "replication_failed": 409,
+    "digest_mismatch": 409,
     "image_staging_failed": 502,
     "invalid_credential_source": 422,
     "busy": 429,
