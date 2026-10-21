@@ -21,6 +21,7 @@ import pytest
 from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+from tensorstead.adapters.runtimes.tensorfold import TensorFoldAdapter
 from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 
@@ -29,7 +30,14 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize(
     "adapter",
-    [VLLMAdapter(), LlamaCppAdapter(), SGLangAdapter(), ExLlamaAdapter(), TRTLLMAdapter()],
+    [
+        VLLMAdapter(),
+        LlamaCppAdapter(),
+        SGLangAdapter(),
+        ExLlamaAdapter(),
+        TRTLLMAdapter(),
+        TensorFoldAdapter(),
+    ],
 )
 def test_each_adapter_names_a_noted_suggested_image(adapter: object) -> None:
     """Every shipped adapter names at least one image, each with a note."""

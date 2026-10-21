@@ -69,10 +69,12 @@ class SchemaProbe:
     """
 
     # Container entrypoint and leading arguments. ``script`` is appended as the
-    # final argument by the engine after being written into the container.
+    # final argument by the engine after being written into the container;
+    # ``None`` when the runtime answers on its own (``tensorfold-native
+    # capabilities --json``), so no empty file is appended to its argv.
     entrypoint: list[str]
     command: list[str]
-    script: str
+    script: str | None
     # vLLM cannot build its argument parser without a device: constructing the
     # config defaults requires device detection. Measured, not assumed.
     needs_accelerator: bool = False

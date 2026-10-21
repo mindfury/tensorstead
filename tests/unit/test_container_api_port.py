@@ -25,6 +25,7 @@ import pytest
 from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
 from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
 from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+from tensorstead.adapters.runtimes.tensorfold import TensorFoldAdapter
 from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
 from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 from tensorstead.agent.container_engine.docker_py import DockerEngine
@@ -55,6 +56,7 @@ def test_every_shipped_adapter_declares_a_port() -> None:
         SGLangAdapter(),
         ExLlamaAdapter(),
         TRTLLMAdapter(),
+        TensorFoldAdapter(),
     ):
         declared = adapter.container_requirements({}).api_port
         assert declared, f"{type(adapter).__name__} declares no in-container API port"

@@ -161,6 +161,7 @@ def _wire_services(
     from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
     from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
     from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+    from tensorstead.adapters.runtimes.tensorfold import TensorFoldAdapter
     from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
     from tensorstead.adapters.runtimes.vllm import VLLMAdapter
     from tensorstead.service.credentials import CredentialService
@@ -185,6 +186,7 @@ def _wire_services(
         else {
             "vllm": VLLMAdapter(),
             "llamacpp": LlamaCppAdapter(),
+            "tensorfold": TensorFoldAdapter(),
             "sglang": SGLangAdapter(),
             "exllama": ExLlamaAdapter(),
             "trtllm": TRTLLMAdapter(),

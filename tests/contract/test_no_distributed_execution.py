@@ -139,6 +139,17 @@ _TRANSPORT_SELECTION_ENVIRONMENT: dict[str, tuple[str, ...]] = {
     "adapters/runtimes/vllm.py": ("NCCL_SOCKET_IFNAME", "NCCL_IB_HCA"),
     "agent/routes/deployments.py": ("NCCL_IB_HCA", "NCCL_IB_GID_INDEX"),
     "agent/host_network.py": (),
+    # TensorFold's own group: its per-family position variables, and the
+    # collective library's rendezvous and interface selection -- declared for a
+    # binary the product runs, not called.
+    "adapters/runtimes/tensorfold.py": (
+        "TF_NEMOTRON_RANK",
+        "TF_NEMOTRON_WORLD",
+        "TF_GLM_RANK",
+        "TF_GLM_WORLD",
+        "NCCL_COMM_ID",
+        "NCCL_SOCKET_IFNAME",
+    ),
 }
 
 

@@ -7,6 +7,37 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **TensorFold runtime** (`runtime_type: tensorfold`). TensorFold is
+  [ashhart/TensorFold](https://github.com/ashhart/TensorFold)'s native serving
+  binary, with exact draft-and-verify decoding.
+  - **Launch:** the adapter runs `tensorfold-native serve` on an acquired
+    checkpoint and delivers the inference key as `TENSORFOLD_API_KEY`, never
+    argv.
+  - **Config:** the served name, context, parallelism, thinking and reasoning
+    effort, drafts, MTP depth, a mounted drafter, KV-cache dtype, prompt cache,
+    vision and precision.
+  - **Refused in `extra_args`:**
+    - the product-owned keys;
+    - `--speed-up`, which loads a native library the record does not describe;
+    - `--cortheon`, which makes the server issue outbound web requests.
+  - **Two nodes:** Nemotron Super VL and GLM-5.3-Flash run as a two-node
+    group, with ranks over NCCL/RDMA on the declared `distributed_interface`;
+    rank 1 serves no API.
+  - **Schema probe:** reads the binary's `capabilities --json`.
+  - **Image:** a build-spec recipe for the image is in `docs/builds.md`.
+
+  Measured on the estate's GB10s against the vLLM deployments of the same
+  checkpoints:
+  - Nemotron Lightning NVFP4: 140 vs 103 tok/s single-stream decode, loaded in
+    14 s vs 176 s.
+  - Nemotron Super VL NVFP4: 50 vs 48 tok/s on one node, 61 tok/s on two.
+  - Nemotron Bolt: 39 vs 81 tok/s. TensorFold has no drafter for it.
+
+### Changed
+- `SchemaProbe.script` may be `None`, for a runtime that reports its own
+  surface without a probe script.
+
 ### Fixed
 - **Adding a node to a model already on the estate copies it instead of
   downloading it again.** `acquire` looked for an existing replica only among

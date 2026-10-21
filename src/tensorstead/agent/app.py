@@ -544,12 +544,14 @@ def build_agent_app(
     from tensorstead.adapters.runtimes.exllama import ExLlamaAdapter
     from tensorstead.adapters.runtimes.llamacpp import LlamaCppAdapter
     from tensorstead.adapters.runtimes.sglang import SGLangAdapter
+    from tensorstead.adapters.runtimes.tensorfold import TensorFoldAdapter
     from tensorstead.adapters.runtimes.trtllm import TRTLLMAdapter
     from tensorstead.adapters.runtimes.vllm import VLLMAdapter
 
     app.state.runtime_adapters = {
         "vllm": VLLMAdapter(),
         "llamacpp": LlamaCppAdapter(),
+        "tensorfold": TensorFoldAdapter(),
         "sglang": SGLangAdapter(),
         "exllama": ExLlamaAdapter(),
         "trtllm": TRTLLMAdapter(),

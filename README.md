@@ -7,7 +7,8 @@
 
 Tensorstead is a management plane for self-hosted AI inference appliances. It
 acquires model weights, places them on your machines, and starts, stops, and
-restores inference runtimes (vLLM, SGLang, llama.cpp, ExLlama, TensorRT-LLM)
+restores inference runtimes (vLLM, SGLang, llama.cpp, ExLlama, TensorRT-LLM,
+TensorFold)
 exactly as you declared them — and it keeps a complete, exportable record of every change. It is
 equally usable by a human at a CLI and by an AI agent over MCP.
 
@@ -94,7 +95,8 @@ Tensorstead replaces that with a small, strict contract:
   private CA for management TLS.
 
 Multi-node deployments are supported when the runtime itself distributes
-(vLLM and SGLang do; llama.cpp, ExLlama and TensorRT-LLM do not). Tensorstead
+(vLLM and SGLang do, and TensorFold does across two nodes for the model families
+it supports; llama.cpp, ExLlama and TensorRT-LLM do not). Tensorstead
 coordinates; the runtime distributes.
 
 ## Status and hardware
