@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.9.0] - 2026-10-20
 
 ### Added
 - **TensorFold runtime** (`runtime_type: tensorfold`). TensorFold is
@@ -539,6 +539,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.9.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.9.0
 [1.8.2]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.2
 [1.8.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.1
 [1.8.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.0
