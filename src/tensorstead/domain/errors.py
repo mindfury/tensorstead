@@ -227,6 +227,17 @@ class AcquisitionInProgressError(DomainError):
     code = "acquisition_in_progress"
 
 
+class DigestMismatchError(DomainError):
+    """A replica's computed digest differs from the one already recorded.
+
+    The recorded digest is not replaced: either the bytes on the node changed
+    since they were recorded, or the record is wrong, and choosing which is the
+    operator's call, not the product's.
+    """
+
+    code = "digest_mismatch"
+
+
 class ReplicationFailedError(DomainError):
     """A peer holds the model, copying it from that peer failed, and upstream was not retried.
 

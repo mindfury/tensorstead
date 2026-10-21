@@ -5,6 +5,23 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Added
+- **`stead model digest` / `POST /v1/models/{id}:digest` / MCP
+  `model_digest`.**
+  - **What it does:** computes and records the content digest and size of a
+    replica the estate already holds.
+  - **Why:** models acquired before downloads were digested could not be
+    copied between nodes. Replication refused, correctly, with nothing to
+    verify against, so placing one on another node meant downloading it from
+    upstream again. Found placing Nemotron Bolt on a second node.
+  - **After digesting:** the acquire copies node to node, verified.
+  - **A model that already has a digest** is verified, never overwritten.
+    A difference is reported as `digest_mismatch`.
+  - **Model records also gain `size_bytes`**, which every pre-digest model
+    lacked.
+
 ## [1.9.0] - 2026-10-20
 
 ### Added

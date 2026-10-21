@@ -82,6 +82,20 @@ class NodeClient(Protocol):
         empty means all of them.
         """
 
+    def digest_model(
+        self,
+        node: Node,
+        *,
+        source_id: str,
+        source_model_id: str,
+        file_selector: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """``POST /agent/v1/models:digest`` — digest a replica the node holds.
+
+        Returns ``content_digest`` and ``size_bytes``. Reads the whole tree on
+        the node; nothing but those two values leaves it.
+        """
+
     def replicate_model(
         self,
         node: Node,

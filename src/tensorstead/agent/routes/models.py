@@ -11,7 +11,7 @@ Management-token gated. These routes carry no inference payload.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from tensorstead.agent.acquisition import local_model_id
@@ -83,6 +83,50 @@ def acquire(payload: AcquireRequest, request: Request) -> AcquireResponse:
         size_bytes=replica.size_bytes,
         content_digest=replica.content_digest,
     )
+
+
+class DigestRequest(BaseModel):
+    """Names the replica whose digest to compute, as an acquire names it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1)
+    source_model_id: str = Field(min_length=1)
+    file_selector: list[str] = Field(default_factory=list)
+
+
+class DigestResponse(BaseModel):
+    content_digest: str
+    size_bytes: int
+
+
+@router.post(
+    "/models:digest",
+    response_model=DigestResponse,
+    dependencies=[Depends(require_management)],
+)
+def digest(payload: DigestRequest, request: Request) -> DigestResponse:
+    """Compute and record the digest of a replica already on this host.
+
+    Reads the whole tree: minutes for a large model. Nothing leaves the node
+    but the digest and the size.
+    """
+    from tensorstead.agent.replication import UnsupportedTreeEntry
+
+    selector = canonical_file_selector(payload.file_selector)
+    model_id = local_model_id(payload.source_id, payload.source_model_id, selector)
+    try:
+        content_digest, size_bytes = request.app.state.acquisition.digest_replica(model_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404, detail={"code": "replica_not_found", "message": str(exc)}
+        ) from exc
+    except UnsupportedTreeEntry as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "unsupported_tree_entry", "message": str(exc)},
+        ) from exc
+    return DigestResponse(content_digest=content_digest, size_bytes=size_bytes)
 
 
 @router.get(

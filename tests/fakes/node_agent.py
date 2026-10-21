@@ -82,6 +82,12 @@ class FakeNodeAgent:
         self.enumerates_containers = True
         self.acquisition_calls = 0
         self._available_digest: dict[str, str] = {}
+        # Simulates a model acquired before the agent digested downloads: the
+        # acquire reports no digest, as the real agent did then.
+        self.report_digest_on_acquire = True
+        # What ``digest_model`` computes over a replica's tree.
+        self.computed_digest = "sha256:fake-digest"
+        self.digest_calls: list[str] = []
         # The agent's model source. Acquisition runs the *real*
         # HuggingFaceSource against this fake hub, so the refusal mapping under
         # test is the one the product ships, not a second copy of it.
@@ -204,6 +210,8 @@ class FakeNodeAgent:
         # Promote to available atomically after verification.
         staging.state = "available"
         staging.verified_at = datetime.now()
+        if not self.report_digest_on_acquire:
+            return {"resolved_revision": resolved, "revision_pinned": resolved is not None}
         self._available_digest[model_id] = "sha256:fake-digest"
         return {
             "resolved_revision": resolved,
@@ -211,6 +219,18 @@ class FakeNodeAgent:
             "size_bytes": 1234,
             "content_digest": "sha256:fake-digest",
         }
+
+    def digest_model(
+        self, *, source_id: str, source_model_id: str, file_selector: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
+        """Digest a replica this agent holds, as ``POST /agent/v1/models:digest``."""
+        model_id = f"{source_id}:{source_model_id}"
+        self.digest_calls.append(model_id)
+        replica = self.replicas.get(model_id)
+        if replica is None or replica.state != "available":
+            raise LookupError(f"no available replica of {model_id!r} on this node")
+        self._available_digest[model_id] = self.computed_digest
+        return {"content_digest": self.computed_digest, "size_bytes": 4321}
 
     # --- peer replication ---
     def replicate_model(

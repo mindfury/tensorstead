@@ -677,6 +677,48 @@ class ModelAcquisitionService:
             )
         return replicas
 
+    def digest_replica(self, model_id: str) -> tuple[str, int]:
+        """Compute and record the digest of a replica this node already holds.
+
+        Replicas acquired before the agent digested downloads carry none, and a
+        peer copy is refused without one -- correctly, since there is nothing to
+        verify it against. That left every such model stranded on the node
+        that fetched it, with a second download from upstream the only way to
+        place it anywhere else. This computes the same framed digest a fresh
+        download records (``directory_digest``), over the promoted tree, plus
+        its size, records both on the replica, and returns them.
+
+        Raises ``LookupError`` for a replica that is not here or not
+        available, and lets ``UnsupportedTreeEntry`` through for a tree that
+        cannot be given an unambiguous digest (a link or special file).
+        """
+        from tensorstead.agent.replication import directory_digest
+
+        replica = self.get_replica(model_id)
+        if replica is None or replica.state != "available":
+            raise LookupError(f"no available replica of {model_id!r} on this node")
+        root = Path(self.runtime_model_path(replica.local_path))
+        if not root.is_dir():
+            raise LookupError(f"the replica of {model_id!r} has no directory at {root}")
+        digest = directory_digest(root)
+        size = 0
+        for directory, _subdirs, files in os.walk(root):
+            for name in files:
+                info = os.lstat(os.path.join(directory, name))
+                if stat.S_ISREG(info.st_mode):
+                    size += info.st_size
+        updated = AcquiredReplica(
+            model_id=replica.model_id,
+            resolved_revision=replica.resolved_revision,
+            local_path=replica.local_path,
+            state=replica.state,
+            verified_at=replica.verified_at,
+            size_bytes=size,
+            content_digest=digest,
+        )
+        self._mark_available(updated)
+        return digest, size
+
     def get_replica(self, model_id: str) -> AcquiredReplica | None:
         for replica in self.list_replicas():
             if replica.model_id == model_id:

@@ -29,6 +29,7 @@ from tensorstead.contracts.version import CompatibilityRefusal
 from tensorstead.domain.errors import (
     AcquisitionInProgressError,
     AuthorizationRefusedError,
+    DigestMismatchError,
     NodeOperationFailedError,
     NotFoundError,
     ReplicationFailedError,
@@ -658,6 +659,66 @@ class ModelService:
     # --------------------------------------------------------------- read side
     def list(self) -> list[Model]:
         return self._repo.list_models()
+
+    def digest(self, model_id: str, node_id: str | None = None) -> dict[str, Any]:
+        """Compute and record the digest of a replica the estate already holds.
+
+        A model acquired before the agent digested downloads carries no
+        ``content_digest``, so replication refuses to copy it -- there is
+        nothing to verify the copy against -- and the only way to place it on
+        another node was a second download from upstream. This asks a node
+        holding an available replica (``node_id``, or the first in a stable
+        order) to digest its tree, and records the digest and size.
+
+        A model that already has a digest is verified rather than overwritten:
+        the same digest is a confirmation, a different one is
+        ``digest_mismatch`` and the record is left as it was.
+        """
+        model = self.get(model_id)
+        holders = sorted(
+            replica.node_id
+            for replica in self._repo.list_replicas(model.id)
+            if replica.state == ReplicaState.AVAILABLE
+        )
+        if node_id is not None:
+            if node_id not in holders:
+                raise NotFoundError(
+                    f"{self._node_name(node_id)} holds no available replica of "
+                    f"{model.source_model_id!r}",
+                    node_id=node_id,
+                )
+            holder = node_id
+        elif holders:
+            holder = holders[0]
+        else:
+            raise NotFoundError(f"no node holds an available replica of {model.source_model_id!r}")
+        node = self._repo.get_node(holder)
+        if node is None:
+            raise NotFoundError(f"no node with id {holder!r}")
+        result = self._client.digest_model(
+            node,
+            source_id=model.source_id,
+            source_model_id=model.source_model_id,
+            file_selector=tuple(model.file_selector),
+        )
+        digest = str(result["content_digest"])
+        size = int(result["size_bytes"])
+        if model.content_digest is not None and model.content_digest != digest:
+            raise DigestMismatchError(
+                f"{self._node_name(holder)}'s replica of {model.source_model_id!r} digests to "
+                f"{digest}, but {model.content_digest} is recorded; the record was left as it "
+                f"was",
+                node_id=holder,
+                detail={"recorded": model.content_digest, "computed": digest},
+            )
+        self._repo.update_model_content(model.id, content_digest=digest, size_bytes=size)
+        return {
+            "model_id": model.id,
+            "node_id": holder,
+            "content_digest": digest,
+            "size_bytes": size,
+            "outcome": "verified" if model.content_digest == digest else "recorded",
+        }
 
     def get(self, model_id: str) -> Model:
         model = self._repo.get_model(model_id)

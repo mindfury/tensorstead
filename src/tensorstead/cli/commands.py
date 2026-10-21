@@ -825,6 +825,26 @@ def model_show(
     _run("GET", f"/v1/models/{model['id']}", None, json_mode)
 
 
+@models_app.command("digest")
+def model_digest(
+    model_id: Annotated[str, typer.Argument()],
+    node: Annotated[
+        str | None, typer.Option("--node", help="Node whose replica to digest.")
+    ] = None,
+    json_mode: Annotated[
+        bool, typer.Option("--json", help="Emit JSON for machine consumption.")
+    ] = False,
+) -> None:
+    """Record a replica's digest so the model can be copied node to node.
+
+    For models acquired before downloads were digested: their copies are
+    refused (nothing to verify against) until this has run once.
+    """
+    model = _get_model(model_id)
+    body = {"node_id": _get_node(node)["id"]} if node else {}
+    _run("POST", f"/v1/models/{model['id']}:digest", body, json_mode, expected=202)
+
+
 @models_app.command("delete")
 def model_delete(
     model_id: Annotated[str, typer.Argument()],
