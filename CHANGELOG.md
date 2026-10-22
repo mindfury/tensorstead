@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.10.0] - 2026-10-22
 
 ### Added
 - **`stead model digest` / `POST /v1/models/{id}:digest` / MCP
@@ -29,6 +29,10 @@ is versioned separately (`stead status` reports both).
   while Tensorstead published 8080, so the deployment never became ready. Found
   deploying Recursive Flint on llama.cpp b11804. The adapter now passes
   `--port 8080` explicitly; older builds are unaffected.
+
+### Dependencies
+- `certifi` 2026.7.22 → 2026.10.19 (#47, security group): the CA bundle used for
+  TLS verification.
 
 ## [1.9.0] - 2026-10-20
 
@@ -564,6 +568,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.10.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.10.0
 [1.9.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.9.0
 [1.8.2]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.2
 [1.8.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.8.1
