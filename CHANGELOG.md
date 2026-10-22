@@ -22,6 +22,14 @@ is versioned separately (`stead status` reports both).
   - **Model records also gain `size_bytes`**, which every pre-digest model
     lacked.
 
+### Fixed
+- **llama.cpp deployments bind the port Tensorstead publishes.** `llama-server`
+  changed its default port from 8080 to 9931 on 2026-10-09 (ggml-org/llama.cpp
+  #30159). With any build since then, the server loaded and listened on 9931
+  while Tensorstead published 8080, so the deployment never became ready. Found
+  deploying Recursive Flint on llama.cpp b11804. The adapter now passes
+  `--port 8080` explicitly; older builds are unaffected.
+
 ## [1.9.0] - 2026-10-20
 
 ### Added

@@ -43,6 +43,10 @@ _SHARD_RE = re.compile(r"-\d{5}-of-\d{5}(?=\.gguf$)")
 # below cannot drift apart, the same way vLLM names its own.
 _CREDENTIAL_ENV_VAR = "LLAMA_API_KEY"
 
+# The in-container port: published by ``container_requirements`` and bound by
+# ``build_launch_args``, so the two cannot disagree.
+_CONTAINER_PORT = 8080
+
 _FORBIDDEN_EXTRA_ARGS: dict[str, str] = {
     "model": "the model path comes from the acquired model, not from config",
     "api-key": "the inference credential is delivered as environment, never argv",
@@ -447,7 +451,9 @@ class LlamaCppAdapter:
         drafter = LlamaCppConfig(**(config or {})).draft_model
         # A drafter is a second set of weights this container reads; naming it
         # here is what lets the agent decide whether to mount it.
-        return ContainerRequirements(api_port=8080, model_references=[drafter] if drafter else [])
+        return ContainerRequirements(
+            api_port=_CONTAINER_PORT, model_references=[drafter] if drafter else []
+        )
 
     def schema_probe(self) -> SchemaProbe | None:
         """No probe declared for llama.cpp.
@@ -510,6 +516,12 @@ class LlamaCppAdapter:
         # adapter's own business and is not configurable: an
         # operator who could set it could only break the mapping.
         args += ["--host", "0.0.0.0"]  # noqa: S104 - inside the container namespace
+        # Stated, not inherited: llama-server's default moved from 8080 to 9931
+        # on 2026-10-09 (ggml-org/llama.cpp #30159), and a build from after
+        # that listened where nothing was published -- loaded, "listening",
+        # and never ready (flint on the estate, 2026-10-22). The port this
+        # adapter publishes and the one the server binds are now one constant.
+        args += ["--port", str(_CONTAINER_PORT)]
         if validated.mmproj_file is not None:
             args += ["--mmproj", str(Path(model_path) / validated.mmproj_file)]
         # -1 is llama-server's own default meaning; passing it adds nothing.

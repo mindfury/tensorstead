@@ -110,3 +110,16 @@ def test_the_host_side_port_still_comes_from_the_endpoint() -> None:
 def test_a_call_with_no_requirements_behaves_as_before() -> None:
     """The pre-spec shape keeps its historical port rather than failing."""
     assert _created(None)["ports"] == {"8000/tcp": 9001}
+
+
+def test_llamacpp_binds_the_port_it_publishes(tmp_path: object) -> None:
+    """llama-server's default moved to 9931 (llama.cpp #30159); the port is now explicit."""
+    from pathlib import Path
+
+    model = Path(str(tmp_path)) / "m"
+    model.mkdir()
+    (model / "w.gguf").write_bytes(b"gguf")
+    adapter = LlamaCppAdapter()
+    args = adapter.build_launch_args({}, model_path=str(model))
+    published = adapter.container_requirements({}).api_port
+    assert args[args.index("--port") + 1] == str(published) == "8080"
