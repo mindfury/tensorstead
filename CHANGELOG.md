@@ -7,6 +7,20 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Added
+- **Azure ML registry model source** (`source_id: "azureml"`). Some models are
+  published only to the Azure ML public registry, such as Microsoft's
+  MAI-Code-1.1-Flash-On-Device. Fetching one used to mean a hand download
+  outside Tensorstead.
+  - **Model ids** are `<registry>/<name>`, and an explicit version is required.
+  - **The resolved revision** is `<version>@<manifest SHA-512>`, so files that
+    change under the same version are refused, not silently fetched.
+  - **Downloads** use the registry's short-lived read-only link. Each file is
+    checked against its published MD5 and size, `file_selector` is honoured,
+    and the link's signature is never logged.
+  - **Agents** now route acquires by `source_id`; an unknown source is refused
+    (`unknown_model_source`).
+
 ### Fixed
 - **Copying a large model between nodes no longer reports failure while it is
   still copying.** The coordinator waited only the default 30 s for

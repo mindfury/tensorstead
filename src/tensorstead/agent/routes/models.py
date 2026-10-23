@@ -63,7 +63,17 @@ def acquire(payload: AcquireRequest, request: Request) -> AcquireResponse:
     """Acquire a model revision from upstream, stage→verify→promote."""
     state = request.app.state
     acquisition = state.acquisition
-    source = state.model_source
+    sources = getattr(state, "model_sources", None) or {"huggingface": state.model_source}
+    source = sources.get(payload.source_id)
+    if source is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "unknown_model_source",
+                "message": f"this agent has no model source {payload.source_id!r}; "
+                f"it has {', '.join(sorted(sources))}",
+            },
+        )
 
     progress = _ProgressReporter()
 
