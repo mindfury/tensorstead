@@ -506,3 +506,19 @@ stead model acquire huggingface nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB \
 The digest also records the model's size. A model that already has a digest
 is verified rather than overwritten. If the bytes no longer match,
 `digest_mismatch` reports both values and leaves the record as it was.
+
+## Models from the Azure ML registry
+
+Besides Hugging Face, a model can come from the Azure ML public registry. No
+Azure account is needed for models that registry publishes publicly:
+
+```sh
+stead model acquire azureml azureml/MAI-Code-1.1-Flash-On-Device \
+  --revision 2 --node spark-471b.internal
+```
+
+The id is `<registry>/<model name>`, and a version is required. The recorded
+revision is `2@<manifest digest>`. A later acquire refuses if the registry's
+files for that version have changed. Use `--file-selector` to fetch a subset.
+Copies to other nodes go node to node and are verified, the same as Hugging
+Face models.

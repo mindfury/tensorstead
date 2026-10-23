@@ -282,6 +282,12 @@ def build_agent_app_from_env() -> FastAPI:
     )
 
 
+def _source_id(source: Any) -> str:
+    """A source's id; an injected source without one stands in for Hugging Face."""
+    named = getattr(source, "source_id", None)
+    return str(named()) if callable(named) else "huggingface"
+
+
 def build_agent_app(
     *,
     management_token: str | None = None,
@@ -491,6 +497,16 @@ def build_agent_app(
 
         service_manager = SystemdServiceManager()
     app.state.model_source = model_source
+    # Acquires are routed by ``source_id``. Before there was one source and
+    # every acquire went to it whatever the request named. An injected source
+    # (tests) stays the only one unless it is Hugging Face's own adapter.
+    sources: dict[str, Any] = {_source_id(model_source): model_source}
+    if type(model_source).__name__ == "HuggingFaceSource":
+        from tensorstead.adapters.sources.azureml import AzureMLRegistrySource
+
+        azureml = AzureMLRegistrySource()
+        sources[azureml.source_id()] = azureml
+    app.state.model_sources = sources
     app.state.container_engine = container_engine
     app.state.service_manager = service_manager
 
