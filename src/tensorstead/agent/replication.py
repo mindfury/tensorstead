@@ -261,8 +261,15 @@ class PeerReplicationService:
         source_node_id: str | None = None,
         source_fingerprint: str | None = None,
         replication_token: str | None = None,
+        resolved_revision: str | None = None,
     ) -> ReplicationOutcome:
         """Pull → stage → verify → promote.
+
+        ``resolved_revision`` is recorded on the promoted replica. It used to be
+        dropped, so a copied replica carried no revision and anything bound to
+        one -- a code-execution approval -- refused to start on it (FP4-Local
+        TP=2 on the estate: "no acquired model on this node matches ... with an
+        immutable revision").
 
         Raises ``ReplicationError`` on an unreachable peer, a peer that will not
         serve, or a digest mismatch. In every failure case the replica is marked
@@ -272,6 +279,28 @@ class PeerReplicationService:
             raise ReplicationError(
                 "replication_unavailable",
                 "no peer transport is configured on this agent",
+            )
+
+        # Already here, verified against the same digest: nothing to copy. This
+        # is what makes re-running an acquire after a timed-out copy cheap --
+        # the copy usually finished on the agents after the coordinator stopped
+        # waiting, and a retry used to wipe it and start the transfer again.
+        existing = self._acquisition.get_replica(model_id)
+        if (
+            content_digest is not None
+            and existing is not None
+            and existing.state == "available"
+            and existing.content_digest == content_digest
+        ):
+            if existing.resolved_revision is None and resolved_revision is not None:
+                # A copy made before revisions were carried: record it now, so
+                # a retried acquire repairs the replica without moving a byte.
+                self._acquisition.record_revision(model_id, resolved_revision)
+            return ReplicationOutcome(
+                model_id=existing.model_id,
+                state=existing.state,
+                content_digest=existing.content_digest,
+                size_bytes=existing.size_bytes,
             )
 
         staging_dir = self._acquisition.staging_path(model_id)
@@ -302,6 +331,7 @@ class PeerReplicationService:
         replica: AcquiredReplica = self._acquisition.promote(
             model_id,
             staging_dir,
+            resolved_revision=resolved_revision,
             size_bytes=size_bytes,
             content_digest=computed,
         )
