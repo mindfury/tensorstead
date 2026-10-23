@@ -5,6 +5,19 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Fixed
+- **Copying a large model between nodes no longer reports failure while it is
+  still copying.** The coordinator waited only the default 30 s for
+  `models:replicate`. Copying a 95 GB checkpoint was marked failed while both
+  agents carried on, and the failure told the operator to check `image_list`.
+  Replicate now gets the same one-hour bound as acquire and digest, and a
+  timed-out model call points at `model_list`.
+- **Re-running an acquire after such a timeout is free.** A destination that
+  already holds an available replica with the expected digest answers at once.
+  It no longer wipes the finished copy and transfers it again.
+
 ## [1.10.0] - 2026-10-22
 
 ### Added

@@ -274,6 +274,24 @@ class PeerReplicationService:
                 "no peer transport is configured on this agent",
             )
 
+        # Already here, verified against the same digest: nothing to copy. This
+        # is what makes re-running an acquire after a timed-out copy cheap --
+        # the copy usually finished on the agents after the coordinator stopped
+        # waiting, and a retry used to wipe it and start the transfer again.
+        existing = self._acquisition.get_replica(model_id)
+        if (
+            content_digest is not None
+            and existing is not None
+            and existing.state == "available"
+            and existing.content_digest == content_digest
+        ):
+            return ReplicationOutcome(
+                model_id=existing.model_id,
+                state=existing.state,
+                content_digest=existing.content_digest,
+                size_bytes=existing.size_bytes,
+            )
+
         staging_dir = self._acquisition.staging_path(model_id)
         shutil.rmtree(staging_dir, ignore_errors=True)
         staging_dir.mkdir(parents=True, exist_ok=True)

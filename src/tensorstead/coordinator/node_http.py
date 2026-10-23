@@ -75,6 +75,8 @@ from tensorstead.ports.node_client import AgentCallError
 # the *coordinator's* own submission path already is. That changes the agent
 # contract, so it is not this change.
 _BUILD_TIMEOUT_SECONDS = 14400.0
+# Acquire, digest and replicate each read a whole model; one bound for all three.
+_MODEL_TRANSFER_TIMEOUT = 3600.0
 
 # Moving a multi-gigabyte archive between peers. Unchanged; it was already
 # measured against a real transfer.
@@ -174,11 +176,20 @@ class NodeHTTPClient:
         """
         started = not isinstance(exc, httpx.ConnectTimeout)
         if started:
+            # What to check depends on what was started: an image build or pull
+            # lands in ``image_list``, a model acquire or copy in ``model_list``.
+            # A copy of a 95 GB model was told to check ``image_list``.
+            if "/images" in path:
+                check, thing, work = "image_list", "image", "a build that is still going"
+            elif "/models" in path:
+                check, thing, work = "model_list", "model replica", "a transfer that is still going"
+            else:
+                check, thing, work = "the node's state", "result", "work that is still going"
             consequence = (
                 "the agent accepted the request and this side stopped waiting, so the work is "
-                "probably still running on the node. Check `image_list` before retrying -- the "
-                "image may appear after this failure was recorded, and a retry would race a "
-                "build that is still going"
+                f"probably still running on the node. Check `{check}` before retrying -- the "
+                f"{thing} may appear after this failure was recorded, and a retry would race "
+                f"{work}"
             )
         else:
             consequence = (
@@ -285,7 +296,7 @@ class NodeHTTPClient:
             "POST",
             "/agent/v1/models:acquire",
             json=payload,
-            timeout=3600.0,
+            timeout=_MODEL_TRANSFER_TIMEOUT,
         )
 
     def digest_model(
@@ -302,7 +313,9 @@ class NodeHTTPClient:
             "source_model_id": source_model_id,
             "file_selector": list(file_selector),
         }
-        return self._call(node, "POST", "/agent/v1/models:digest", json=payload, timeout=3600.0)
+        return self._call(
+            node, "POST", "/agent/v1/models:digest", json=payload, timeout=_MODEL_TRANSFER_TIMEOUT
+        )
 
     def replicate_model(
         self,
@@ -329,7 +342,17 @@ class NodeHTTPClient:
                 "agent_cert_fingerprint": source_node.agent_cert_fingerprint,
             },
         }
-        return self._call(node, "POST", "/agent/v1/models:replicate", json=payload)
+        # A copy reads, packs, transfers, unpacks and digests the whole model:
+        # minutes for 95 GB. The default per-call bound (30 s) marked one failed
+        # while both agents carried on with it -- the same bound acquire and
+        # digest were already given.
+        return self._call(
+            node,
+            "POST",
+            "/agent/v1/models:replicate",
+            json=payload,
+            timeout=_MODEL_TRANSFER_TIMEOUT,
+        )
 
     def build_image(self, node: Node, payload: dict[str, Any]) -> dict[str, Any]:
         """Build a recorded spec on ``node``."""
