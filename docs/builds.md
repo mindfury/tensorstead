@@ -52,7 +52,7 @@ make builds
 Then deploy that build by pointing the artifact at its archived wheel:
 
 ```sh
-make deploy TENSORSTEAD_DEPLOY_ARTIFACT=dist/builds/3/tensorstead-1.10.0-py3-none-any.whl
+make deploy TENSORSTEAD_DEPLOY_ARTIFACT=dist/builds/3/tensorstead-1.11.0-py3-none-any.whl
 ```
 
 ### Dependency upgrades (requalification)
