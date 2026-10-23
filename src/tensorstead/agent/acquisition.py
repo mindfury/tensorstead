@@ -719,6 +719,23 @@ class ModelAcquisitionService:
         self._mark_available(updated)
         return digest, size
 
+    def record_revision(self, model_id: str, resolved_revision: str) -> None:
+        """Record the revision of an available replica that was stored without one."""
+        replica = self.get_replica(model_id)
+        if replica is None or replica.state != "available":
+            raise LookupError(f"no available replica of {model_id!r} on this node")
+        self._mark_available(
+            AcquiredReplica(
+                model_id=replica.model_id,
+                resolved_revision=resolved_revision,
+                local_path=replica.local_path,
+                state=replica.state,
+                verified_at=replica.verified_at,
+                size_bytes=replica.size_bytes,
+                content_digest=replica.content_digest,
+            )
+        )
+
     def get_replica(self, model_id: str) -> AcquiredReplica | None:
         for replica in self.list_replicas():
             if replica.model_id == model_id:

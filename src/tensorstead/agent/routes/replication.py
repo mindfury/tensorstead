@@ -98,6 +98,7 @@ def replicate(payload: ReplicateRequest, request: Request) -> ReplicateResponse:
         outcome = service.replicate(
             model_id=_model_id(payload.model),
             content_digest=payload.model.content_digest,
+            resolved_revision=payload.model.resolved_revision,
             source_endpoint=payload.source_replica.agent_endpoint,
             source_node_id=payload.source_replica.node_id,
             source_fingerprint=payload.source_replica.agent_cert_fingerprint,
