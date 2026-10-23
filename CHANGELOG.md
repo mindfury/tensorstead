@@ -17,6 +17,12 @@ is versioned separately (`stead status` reports both).
 - **Re-running an acquire after such a timeout is free.** A destination that
   already holds an available replica with the expected digest answers at once.
   It no longer wipes the finished copy and transfers it again.
+- **A copied replica keeps its revision.** The coordinator sent
+  `resolved_revision` with every replicate call, but the agent dropped it, so a
+  replica that arrived by copy had no revision. Anything bound to a revision,
+  such as an `allow_io_uring` approval, refused to start on it. The revision is
+  now recorded when the copy is promoted, and a retried acquire fills it in on
+  a replica copied earlier, without moving a byte.
 
 ## [1.10.0] - 2026-10-22
 

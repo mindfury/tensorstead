@@ -109,3 +109,17 @@ def test_a_different_digest_still_copies(tmp_path: Path) -> None:
             source_endpoint="https://peer:8443",
         )
     assert peer.calls == 1
+
+
+def test_a_retry_records_the_revision_a_copied_replica_was_stored_without(tmp_path: Path) -> None:
+    """An approval binds a revision; a copied replica without one could not start."""
+    acquisition, digest = _held(tmp_path)
+    assert acquisition.get_replica("huggingface:m").resolved_revision is None  # type: ignore[union-attr]
+    service = PeerReplicationService(acquisition=acquisition, peer_client=_Peer())
+    service.replicate(
+        model_id="huggingface:m",
+        content_digest=digest,
+        source_endpoint="https://peer:8443",
+        resolved_revision="b9ce18a6",
+    )
+    assert acquisition.get_replica("huggingface:m").resolved_revision == "b9ce18a6"  # type: ignore[union-attr]
