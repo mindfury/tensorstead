@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.12.0] - 2026-10-24
 
 ### Changed
 - **Node-to-node model copies are several times faster.** A copy ran at about
@@ -30,6 +30,9 @@ is versioned separately (`stead status` reports both).
 - Two agent-to-agent routes under the model content endpoint, gated by the
   replication token like it: `.../content/manifest` and
   `.../content/file?path=` (honours a byte `Range`).
+
+### Security
+- Dependency updates (#58, #57): `fastapi` 0.156.4, `ruff` 0.17.1, and `astral-sh/setup-uv` 10.3.1.
 
 ## [1.11.1] - 2026-10-23
 
@@ -654,6 +657,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.12.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.12.0
 [1.11.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.11.1
 [1.11.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.11.0
 [1.10.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.10.0
