@@ -118,24 +118,34 @@ class LifecycleService:
     def start(self, deployment_id: str) -> Deployment:
         """Start a deployment.
 
-        Already running → ``already_in_state`` with no second instance.
+        Already running → ``already_in_state`` with no second instance. "Already
+        running" is *observed*, not read off the record: a deployment declared
+        running whose containers are gone (a reboot, a crash, an OOM) is started
+        again rather than refused with a claim that it is running. A node that
+        cannot be observed refuses the start without claiming either way.
         On start we drive the agent to materialize the
         current revision, record ``running_revision``, and set desired state to
         ``running`` so the boot-restoration unit stays enabled.
         """
         with self._lock_for(deployment_id):
             deployment = self._get_deployment(deployment_id)
-            if deployment.desired_state == "running":
-                raise AlreadyInStateError(
-                    f"deployment {deployment.name!r} is already running",
-                    detail={"deployment_id": deployment.id},
-                )
-
             revision = self._repo.get_revision(deployment.id, deployment.current_revision)
             if revision is None:
                 raise NotFoundError(
                     f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
                 )
+            if deployment.desired_state == "running":
+                absent = self._nodes_not_running(deployment, revision)
+                if not absent:
+                    raise AlreadyInStateError(
+                        f"deployment {deployment.name!r} is already running "
+                        f"(observed on every node)",
+                        detail={"deployment_id": deployment.id},
+                    )
+                # Declared running, observed not: clear what is left of the
+                # dead instance (an exited container, a unit) so the start
+                # below creates one fresh, exactly as restart would.
+                self._stop_on_nodes(deployment)
             self._refuse_served_name_conflict(deployment, revision.runtime_config)
 
             # Drive the agent on every participating node, collecting per-node
@@ -179,22 +189,25 @@ class LifecycleService:
     def stop(self, deployment_id: str) -> Deployment:
         """Stop a deployment.
 
-        Already stopped → ``already_in_state``. Stops the
+        Already stopped → ``already_in_state``, once no node is observed still
+        running it; a deployment recorded stopped that is in fact running (a
+        stop that half-failed, a hand start) is stopped. Stops the
         container, disables and removes the unit so a reboot does not revive
         it, and records desired state ``stopped``.
         """
         with self._lock_for(deployment_id):
             deployment = self._get_deployment(deployment_id)
-            if deployment.desired_state == "stopped":
-                raise AlreadyInStateError(
-                    f"deployment {deployment.name!r} is already stopped",
-                    detail={"deployment_id": deployment.id},
-                )
-
             revision = self._repo.get_revision(deployment.id, deployment.current_revision)
             if revision is None:
                 raise NotFoundError(
                     f"deployment {deployment.name!r} has no revision {deployment.current_revision}"
+                )
+            if deployment.desired_state == "stopped" and not self._nodes_running(
+                deployment, revision
+            ):
+                raise AlreadyInStateError(
+                    f"deployment {deployment.name!r} is already stopped",
+                    detail={"deployment_id": deployment.id},
                 )
 
             self._drive_nodes(
@@ -700,6 +713,45 @@ class LifecycleService:
         self._client.stop_deployment(node, revision.deployment_id)
 
     # --------------------------------------------------------------- helpers
+    def _observe_statuses(self, deployment: Deployment, revision: Any) -> dict[str, str]:
+        """Each participating node's observed status for this deployment, by node name.
+
+        Raises ``agent_unreachable`` for a node that cannot be asked: a
+        lifecycle answer must not be built on an observation that was not made.
+        """
+        statuses: dict[str, str] = {}
+        for node_id in revision.participating_nodes:
+            node = self._repo.get_node(node_id)
+            if node is None:
+                raise NotFoundError(f"deployment {deployment.name!r} names unknown node {node_id}")
+            try:
+                observed = self._client.get_observed(node, deployment.id)
+            except AgentCallError as exc:
+                raise AgentUnreachableError(
+                    f"deployment {deployment.name!r} is declared {deployment.desired_state}, "
+                    f"but {node.name!r} could not be observed to confirm it: {exc.message}",
+                    node_id=node.id,
+                ) from exc
+            statuses[node.name] = str(observed.get("status", "unknown"))
+        return statuses
+
+    def _nodes_not_running(self, deployment: Deployment, revision: Any) -> list[str]:
+        """Participating nodes not observed running this deployment."""
+        statuses = self._observe_statuses(deployment, revision)
+        return [name for name, status in statuses.items() if status != "running"]
+
+    def _nodes_running(self, deployment: Deployment, revision: Any) -> list[str]:
+        """Participating nodes observed still running this deployment.
+
+        An unreachable node here does not block the answer: a stop could not
+        reach it either, so "already stopped" stands on the record, as before.
+        """
+        try:
+            statuses = self._observe_statuses(deployment, revision)
+        except AgentUnreachableError:
+            return []
+        return [name for name, status in statuses.items() if status == "running"]
+
     def _start_on_nodes(self, deployment: Deployment) -> None:
         """Drive the agent to start the deployment on each participating node."""
         revision = self._repo.get_revision(deployment.id, deployment.current_revision)

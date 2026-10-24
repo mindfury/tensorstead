@@ -5,6 +5,20 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Fixed
+- **`start` and `stop` no longer report the record as if it were the node.**
+  "Already running" and "already stopped" used to be read off the declared
+  state. After a reboot, crash or OOM, `start` refused with "is already
+  running" while the coordinator's own observation said `not_running`. Both
+  now ask the nodes first:
+  - **A deployment declared running whose containers are gone** is started
+    again; the dead container is cleared first.
+  - **A deployment recorded stopped that is still running** is stopped.
+  - **A node that cannot be observed** refuses the start with
+    `agent_unreachable` and makes no claim either way.
+
 ## [1.11.0] - 2026-10-23
 
 ### Added
