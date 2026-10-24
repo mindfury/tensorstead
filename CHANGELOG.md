@@ -5,6 +5,32 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Changed
+- **Node-to-node model copies are several times faster.** A copy ran at about
+  4 Gbps on a 200 Gb fabric. It made four passes over the model, one after
+  another, over a single TLS stream: the source wrote a whole tar before
+  sending a byte, then the destination wrote the tar, unpacked it, and re-read
+  everything to hash it. Each pass ran at roughly 4-5 Gbps. Now the
+  destination reads the source's manifest and pulls the files as byte ranges
+  over several connections, writing each range straight into place. It hashes
+  each file as its pieces land, so verification finishes moments after the
+  last byte. On a 4 GiB loopback benchmark, end to end went from 25.9 s to
+  4.5 s.
+  - The digest, the verification and the staging-then-promote rules are
+    unchanged. The manifest is checked as untrusted input before anything is
+    written, and free space is now checked against the model's real size.
+  - A peer that predates this is still copied over the old tar protocol, so
+    agents can be upgraded one at a time.
+  - `TENSORSTEAD_REPLICATION_CONNECTIONS` (default 8) and
+    `TENSORSTEAD_REPLICATION_HASHERS` (default 4) tune the parallelism.
+
+### Added
+- Two agent-to-agent routes under the model content endpoint, gated by the
+  replication token like it: `.../content/manifest` and
+  `.../content/file?path=` (honours a byte `Range`).
+
 ## [1.11.1] - 2026-10-23
 
 ### Fixed
