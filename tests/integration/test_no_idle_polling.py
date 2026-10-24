@@ -221,6 +221,39 @@ def test_no_background_tasks_started_on_startup() -> None:
     )
 
 
+def test_a_thread_pool_never_outlives_the_call_that_made_it() -> None:
+    """Every ``ThreadPoolExecutor`` in product code is a ``with`` block.
+
+    Pools are how peer replication pulls ranges and hashes files in parallel,
+    and how the lifecycle fans out across nodes. They are allowed because a
+    ``with`` block joins its threads before the call returns: the work is the
+    request's own, done while the request is outstanding. A pool held anywhere
+    else -- an attribute, a module global -- could keep threads running after
+    the request ended, which is the background work this rule forbids.
+    """
+    offenders: list[str] = []
+    seen = 0
+    for py_file in _product_python_files():
+        tree = ast.parse(py_file.read_text())
+        scoped = {
+            id(item.context_expr)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.With)
+            for item in node.items
+        }
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ThreadPoolExecutor"
+            ):
+                seen += 1
+                if id(node) not in scoped:
+                    offenders.append(f"{py_file.relative_to(_SRC)}:{node.lineno}")
+    assert seen >= 4, "the scan no longer finds the pools it exists to police"
+    assert not offenders, "thread pools created outside a with block:\n" + "\n".join(offenders)
+
+
 def test_observation_service_has_no_sampler() -> None:
     """ObservationService.__init__ does not start a sampler or timer."""
     from tensorstead.service.observation import ObservationService

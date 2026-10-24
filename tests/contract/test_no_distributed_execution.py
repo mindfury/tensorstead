@@ -105,6 +105,12 @@ _SANCTIONED_AGENT_PATHS = {
     # agent -> agent (artifact replication only)
     "/agent/v1/models:replicate",
     "/agent/v1/models/{model_id}/content",
+    # The same content, finer grained: its manifest, and one file by byte
+    # range, so a copy can run over several connections instead of one tar
+    # stream. Sub-resources of the content endpoint, not a new reason for nodes
+    # to talk.
+    "/agent/v1/models/{model_id}/content/manifest",
+    "/agent/v1/models/{model_id}/content/file",
 }
 
 
@@ -252,8 +258,16 @@ def test_the_only_agent_to_agent_path_is_artifact_replication() -> None:
     # yields a different identifier for the same spec, so it must be produced
     # once and copied. A third entry here that is not "send me those bytes"
     # should fail this test and be argued for.
+    #
+    # The model endpoint's two sub-resources were argued for, and are still
+    # "send me those bytes": the manifest lists the paths and sizes of the same
+    # content, and the file route serves the same bytes by range so a transfer
+    # can use more than one connection. One TLS stream through one Python
+    # event loop held a 200 Gb fabric to about 4 Gbps.
     assert replication_gated == {
         "/agent/v1/models/{model_id}/content",
+        "/agent/v1/models/{model_id}/content/manifest",
+        "/agent/v1/models/{model_id}/content/file",
         "/agent/v1/images/{reference}/content",
     }, (
         f"agent-to-agent surface is {sorted(replication_gated)}; it must be exactly the "
