@@ -65,6 +65,12 @@ def _store_path(source_id: str, source_model_id: str, file_selector: tuple[str, 
     )
 
 
+# How many times a timed-out acquire hop is asked again before the timeout is
+# reported as the outcome. Each wait is one hop timeout (an hour), so this is
+# about six hours for one transfer.
+_ACQUIRE_TIMEOUT_REWAITS = 5
+
+
 class ModelService:
     """Coordinator-side model acquisition and inspection."""
 
@@ -331,9 +337,43 @@ class ModelService:
             raise UnpinnableError(
                 f"source did not resolve an immutable revision for {source_model_id!r}"
             )
+        self._drop_unresolved_failure_record(
+            source_id, source_model_id, requested_revision, resolved, file_selector
+        )
         return self._find_or_create_model(
             source_id, source_model_id, resolved, replicas, file_selector
         )
+
+    def _drop_unresolved_failure_record(
+        self,
+        source_id: str,
+        source_model_id: str,
+        requested_revision: str,
+        resolved: str,
+        file_selector: tuple[str, ...],
+    ) -> None:
+        """Remove the placeholder a failed attempt recorded under the unresolved name.
+
+        A failed hop records its replica against the *requested* revision
+        (``"2"``, ``"main"``), because nothing was resolved. Once the same
+        acquire succeeds under the resolved revision, that record is only a
+        false statement -- "this model failed on this node" beside the
+        available copy. It is removed only when it can be nothing else: never
+        pinned, every replica failed, and no deployment revision naming it.
+        """
+        if requested_revision == resolved:
+            return
+        stale = self._repo.find_model(source_id, source_model_id, requested_revision, file_selector)
+        if stale is None or stale.revision_pinned:
+            return
+        replicas = self._repo.list_replicas(stale.id)
+        if any(replica.state != ReplicaState.FAILED for replica in replicas):
+            return
+        for deployment in self._repo.list_deployments():
+            for revision in self._repo.list_revisions(deployment.id):
+                if revision.model_id == stale.id:
+                    return
+        self._repo.delete_model_and_replicas(stale.id)
 
     def _try_replicate(
         self,
@@ -454,15 +494,28 @@ class ModelService:
         if node is None:
             raise NotFoundError(f"no node with id {node_id!r}")
         try:
-            response: dict[str, Any] | None = self._client.acquire_model(
-                node,
-                source_id=source.id,
-                source_model_id=source_model_id,
-                revision=revision,
-                credential=secret,
-                file_selector=file_selector,
-            )
-            return response
+            # A hop timeout is not a failed acquire: the agent accepted the
+            # request and is very likely still downloading. Recording it as
+            # failed is what left MAI-Code's 53 GB download (2026-10-23)
+            # marked failed while it completed. Asking again is safe and
+            # truthful: the agent serializes acquires per model, so the repeat
+            # waits for the transfer in flight and then returns its real
+            # outcome -- and it cannot start a second upstream download.
+            for attempt in range(_ACQUIRE_TIMEOUT_REWAITS + 1):
+                try:
+                    response: dict[str, Any] | None = self._client.acquire_model(
+                        node,
+                        source_id=source.id,
+                        source_model_id=source_model_id,
+                        revision=revision,
+                        credential=secret,
+                        file_selector=file_selector,
+                    )
+                    return response
+                except AgentCallError as exc:
+                    if exc.code != "agent_timeout" or attempt == _ACQUIRE_TIMEOUT_REWAITS:
+                        raise
+            raise AssertionError("unreachable")  # pragma: no cover
         except AgentCallError as exc:
             # Record a failed replica so it is never presented as available.
             self._save_replica(
