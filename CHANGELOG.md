@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.11.1] - 2026-10-23
 
 ### Fixed
 - **`start` and `stop` no longer report the record as if it were the node.**
@@ -28,6 +28,9 @@ is versioned separately (`stead status` reports both).
   and used to stay beside the real model, reading "failed, unpinned, 0 bytes".
   It is removed only if it was never pinned, holds only failed replicas, and
   no deployment names it.
+
+### Security
+- Dependency updates (#54): `opentelemetry-api` 1.45.1, `filelock` 4.2.1, `black` 26.10.1.
 
 ## [1.11.0] - 2026-10-23
 
@@ -625,6 +628,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.11.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.11.1
 [1.11.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.11.0
 [1.10.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.10.0
 [1.9.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.9.0
