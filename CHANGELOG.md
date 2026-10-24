@@ -5,6 +5,30 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Fixed
+- **`start` and `stop` no longer report the record as if it were the node.**
+  "Already running" and "already stopped" used to be read off the declared
+  state. After a reboot, crash or OOM, `start` refused with "is already
+  running" while the coordinator's own observation said `not_running`. Both
+  now ask the nodes first:
+  - **A deployment declared running whose containers are gone** is started
+    again; the dead container is cleared first.
+  - **A deployment recorded stopped that is still running** is stopped.
+  - **A node that cannot be observed** refuses the start with
+    `agent_unreachable` and makes no claim either way.
+- **A model download that outlasts the one-hour hop is no longer recorded as
+  failed while it is still running.** The coordinator now asks the agent
+  again, up to 5 more hours. The repeat waits on the agent's per-model lock
+  for the transfer already in flight and returns its real outcome; it cannot
+  start a second download. Real failures are still reported at once.
+- **A failed attempt's placeholder record is removed when the same acquire
+  later succeeds.** It was filed under the unresolved revision (`2`, `main`)
+  and used to stay beside the real model, reading "failed, unpinned, 0 bytes".
+  It is removed only if it was never pinned, holds only failed replicas, and
+  no deployment names it.
+
 ## [1.11.0] - 2026-10-23
 
 ### Added
