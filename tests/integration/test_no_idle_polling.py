@@ -153,6 +153,69 @@ def test_the_rendezvous_wait_is_reachable_only_from_a_request() -> None:
     )
 
 
+def test_the_content_listener_only_waits_for_peers() -> None:
+    """The content listener's accept loop is a listener, not a poller.
+
+    ``agent/content_listener.py`` holds the one loop in the agent that runs for
+    the life of the process -- the same kind of loop uvicorn runs for the main
+    port. The argument that it is allowed: it waits in ``sock_accept`` and does
+    nothing at all until a peer connects, makes no outbound call, and starts no
+    thread (each connection runs on the worker pool Starlette already uses for
+    synchronous routes, for as long as that peer is connected). It is pinned
+    here structurally so it cannot grow into anything else:
+
+    - the module has exactly one loop, in ``_accept``, and it awaits nothing
+      but ``sock_accept``;
+    - nothing in the module sleeps;
+    - the listener is constructed and started only inside the app's lifespan,
+      and only when a content port was configured.
+    """
+    module = _SRC / "agent" / "content_listener.py"
+    tree = ast.parse(module.read_text())
+
+    def _whiles_by_function(root: ast.AST) -> dict[str, list[ast.While]]:
+        found: dict[str, list[ast.While]] = {}
+        for function in ast.walk(root):
+            if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+                loops = [node for node in ast.walk(function) if isinstance(node, ast.While)]
+                if loops:
+                    found[function.name] = loops
+        return found
+
+    whiles = _whiles_by_function(tree)
+    # The accept loop, and the loop that sends one range inside one request.
+    assert sorted(whiles) == ["_accept", "_send_range"], f"loops in {sorted(whiles)}"
+    assert all(len(loops) == 1 for loops in whiles.values())
+    awaited = [
+        node.value.func.attr
+        for node in ast.walk(whiles["_accept"][0])
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+    ]
+    assert awaited == ["sock_accept"], f"the accept loop awaits {awaited}, not only a peer"
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "sleep" for node in ast.walk(tree)
+    ), "nothing in the content listener sleeps"
+
+    app_tree = ast.parse((_SRC / "agent" / "app.py").read_text())
+    constructors = {
+        function.name
+        for function in ast.walk(app_tree)
+        if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ContentListener"
+    }
+    # ``lifespan`` is nested in ``_content_listener_lifespan``, so a walk of the
+    # outer function sees the same call; nothing else may make one.
+    assert constructors == {"_content_listener_lifespan", "lifespan"}, (
+        f"ContentListener is constructed in {sorted(constructors)}; it may run only "
+        f"for the lifetime of the served app"
+    )
+
+
 def _flatten_routes(app: Any) -> list[Any]:
     """Every route on ``app``, descending into included routers.
 

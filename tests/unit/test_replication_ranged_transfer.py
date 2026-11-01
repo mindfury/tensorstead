@@ -23,6 +23,7 @@ import pytest
 from tensorstead.agent import replication as replication_module
 from tensorstead.agent.acquisition import ModelAcquisitionService
 from tensorstead.agent.replication import (
+    PeerManifest,
     PeerReplicationService,
     ReplicationError,
     directory_digest,
@@ -100,10 +101,10 @@ class _InProcessPeer:
         self.closed = 0
         self.archive_fetches = 0
 
-    def fetch_manifest(self, **_kw: Any) -> list[Any] | None:
+    def fetch_manifest(self, **_kw: Any) -> PeerManifest | None:
         if self.manifest_override is not None:
-            return self.manifest_override
-        return [entry.as_json() for entry in self.source.manifest(_MODEL)]
+            return PeerManifest(self.manifest_override)
+        return PeerManifest([entry.as_json() for entry in self.source.manifest(_MODEL)])
 
     def open_session(self, **_kw: Any) -> _Session:
         return _Session(self)

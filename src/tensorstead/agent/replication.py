@@ -32,6 +32,16 @@ over one TLS stream, and every one of those passes ran at roughly 4-5 Gbps.
 That protocol is still served and still spoken, to and from a peer that
 predates the manifest.
 
+The ranges themselves can come from a second port. Through uvicorn every byte
+a source sends is encrypted on its one event-loop thread, and that thread --
+not the fabric, not the disks -- held a copy to about 13 Gbps. A source that
+runs the content listener (``agent/content_listener.py``) advertises its port
+in the manifest, and the destination pulls ranges there instead: each
+connection is served on its own worker thread, so the encryption spreads across
+cores. The listener serves only ``.../content/file``, under the same token and
+the same refusals; a destination that cannot reach it falls back to the main
+port.
+
 The parallelism is request-scoped: each pool is a ``with`` block inside
 ``replicate()``, so its threads are joined before the request returns and
 nothing outlives it (the idle-polling guardrail's rule, and the same shape
@@ -78,6 +88,11 @@ _IO = 8 * 1024 * 1024
 # at a few connections' worth; eight measured at that cap with headroom.
 _DEFAULT_CONNECTIONS = 8
 _DEFAULT_HASHERS = 4
+
+# How long a destination waits to reach a source's advertised content port
+# before falling back to the main port. A firewall that drops rather than
+# refuses would otherwise hold every range for the full transfer timeout.
+_CONTENT_CONNECT_SECONDS = 10.0
 
 # A manifest is a list of paths and sizes; anything near this is not one.
 _MAX_MANIFEST_BYTES = 64 * 1024 * 1024
@@ -126,6 +141,44 @@ class ReplicationError(Exception):
         self.code = code
         self.message = message
         self.detail = detail or {}
+
+
+# The HTTP status for each refusal code, shared by both listeners that serve
+# replication content. Codes not named here are this host's fault: 500.
+REFUSAL_STATUS = {
+    "not_found": 404,
+    "replica_not_available": 409,
+    "verification_failed": 422,
+    "artifact_too_large": 413,
+    "replication_unavailable": 503,
+    "replication_failed": 502,
+}
+
+
+@dataclass(frozen=True)
+class PeerManifest:
+    """A source's manifest as fetched: unvalidated entries and where to pull them.
+
+    ``content_port`` is the source's content listener, when it runs one;
+    ``None`` means pull ranges from the main agent port.
+    """
+
+    entries: list[Any]
+    content_port: int | None = None
+
+
+def advertised_content_port(payload: dict[str, Any], endpoint: str) -> int | None:
+    """The ``content_port`` a manifest advertises, checked as untrusted input."""
+    port = payload.get("content_port")
+    if port is None:
+        return None
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+        raise ReplicationError(
+            "replication_failed",
+            f"peer advertised an invalid content port {str(port)[:20]!r}",
+            detail={"endpoint": endpoint},
+        )
+    return port
 
 
 class PeerClient(Protocol):
@@ -236,6 +289,11 @@ class _HTTPPeerSession:
     every 64 KiB read in Python under the GIL, which held a parallel transfer to
     about 1 GB/s however many connections it ran. ``readinto`` here goes
     straight to ``SSLSocket.recv_into``, which decrypts with the GIL released.
+
+    With ``content_port`` the connections go to the source's content listener,
+    on the same host and verified against the same CA. If that port cannot be
+    reached the session falls back to the main port for every connection after,
+    so a firewall that admits only the main port costs speed, not the copy.
     """
 
     def __init__(
@@ -246,6 +304,7 @@ class _HTTPPeerSession:
         token: str | None,
         context: ssl.SSLContext,
         timeout: float,
+        content_port: int | None = None,
     ) -> None:
         split = urlsplit(endpoint)
         if split.scheme != "https" or not split.hostname:
@@ -255,7 +314,8 @@ class _HTTPPeerSession:
                 detail={"endpoint": endpoint},
             )
         self._host = split.hostname
-        self._port = split.port or 443
+        self._main_port = split.port or 443
+        self._port = content_port or self._main_port
         self._prefix = f"{split.path.rstrip('/')}/agent/v1/models/{model_id}/content/file"
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._endpoint = endpoint
@@ -270,11 +330,37 @@ class _HTTPPeerSession:
         with self._lock:
             if self._idle:
                 return self._idle.pop()
-            conn = http.client.HTTPSConnection(
-                self._host, self._port, context=self._context, timeout=self._timeout
-            )
+            port = self._port
+        try:
+            conn = self._connect(port)
+        except OSError:
+            if port == self._main_port:
+                raise
+            with self._lock:
+                self._port = self._main_port
+            conn = self._connect(self._main_port)
+        with self._lock:
             self._opened.append(conn)
         return conn, memoryview(bytearray(_IO))
+
+    def _connect(self, port: int) -> http.client.HTTPSConnection:
+        """A connected, verified connection to ``port`` on the source host."""
+        connect_timeout = (
+            self._timeout
+            if port == self._main_port
+            else min(self._timeout, _CONTENT_CONNECT_SECONDS)
+        )
+        conn = http.client.HTTPSConnection(
+            self._host, port, context=self._context, timeout=connect_timeout
+        )
+        try:
+            conn.connect()
+        except BaseException:
+            conn.close()
+            raise
+        assert conn.sock is not None  # noqa: S101 - set by connect()
+        conn.sock.settimeout(self._timeout)
+        return conn
 
     def fetch_range(self, path: str, offset: int, length: int, target: Path) -> None:
         conn, buffer = self._take()
@@ -370,8 +456,8 @@ class HTTPPeerClient:
 
     def fetch_manifest(
         self, *, endpoint: str, model_id: str, token: str | None = None
-    ) -> list[Any] | None:
-        """The source's manifest entries, or ``None`` for a peer that has no manifest.
+    ) -> PeerManifest | None:
+        """The source's manifest, or ``None`` for a peer that has no manifest.
 
         A peer that predates the ranged protocol answers its framework's bare
         404 for the unknown route; a current peer refusing *this model* answers
@@ -423,10 +509,16 @@ class HTTPPeerClient:
                 f"peer's manifest for {model_id!r} is not a list of entries",
                 detail={"endpoint": endpoint},
             )
-        return entries
+        assert isinstance(payload, dict)  # noqa: S101 - entries came from it
+        return PeerManifest(entries, advertised_content_port(payload, endpoint))
 
     def open_session(
-        self, *, endpoint: str, model_id: str, token: str | None = None
+        self,
+        *,
+        endpoint: str,
+        model_id: str,
+        token: str | None = None,
+        content_port: int | None = None,
     ) -> PeerSession:
         return _HTTPPeerSession(
             endpoint=endpoint,
@@ -434,6 +526,7 @@ class HTTPPeerClient:
             token=token,
             context=self._context(),
             timeout=self._timeout,
+            content_port=content_port,
         )
 
     def fetch_content(
@@ -694,8 +787,14 @@ class PeerReplicationService:
                 computed = directory_digest(staging_dir)
                 size_bytes = _directory_size(staging_dir)
             else:
+                entries, content_port = manifest
                 computed, size_bytes = self._pull_files(
-                    manifest, staging_dir, model_id, source_endpoint, replication_token
+                    entries,
+                    staging_dir,
+                    model_id,
+                    source_endpoint,
+                    replication_token,
+                    content_port=content_port,
                 )
             self._verify(model_id, computed, content_digest, source_node_id)
         except ReplicationError:
@@ -741,13 +840,15 @@ class PeerReplicationService:
 
     def _manifest(
         self, model_id: str, endpoint: str, token: str | None
-    ) -> list[ManifestEntry] | None:
-        """The source's validated manifest, or ``None`` to use the archive protocol."""
+    ) -> tuple[list[ManifestEntry], int | None] | None:
+        """The source's validated entries and content port, or ``None`` for the archive."""
         fetch = getattr(self._peer, "fetch_manifest", None)
         if fetch is None or getattr(self._peer, "open_session", None) is None:
             return None
-        raw = fetch(endpoint=endpoint, model_id=model_id, token=token)
-        return None if raw is None else self._validated_manifest(raw, model_id)
+        fetched: PeerManifest | None = fetch(endpoint=endpoint, model_id=model_id, token=token)
+        if fetched is None:
+            return None
+        return self._validated_manifest(fetched.entries, model_id), fetched.content_port
 
     def _validated_manifest(self, raw: list[Any], model_id: str) -> list[ManifestEntry]:
         """A peer's manifest, checked as the untrusted input it is.
@@ -816,6 +917,8 @@ class PeerReplicationService:
         model_id: str,
         endpoint: str,
         token: str | None,
+        *,
+        content_port: int | None = None,
     ) -> tuple[str, int]:
         """Pull every file as byte ranges in parallel; return ``(digest, size)``.
 
@@ -862,7 +965,7 @@ class PeerReplicationService:
         )
         assert self._peer is not None  # noqa: S101 - narrowed in replicate()
         session: PeerSession = self._peer.open_session(  # type: ignore[attr-defined]
-            endpoint=endpoint, model_id=model_id, token=token
+            endpoint=endpoint, model_id=model_id, token=token, content_port=content_port
         )
         try:
             with (

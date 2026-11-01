@@ -24,6 +24,12 @@ tensorstead_coordinator_credentials_dir: /var/lib/tensorstead/coordinator/creden
 tensorstead_coordinator_credential_import_dir: /var/lib/tensorstead/credential-imports
 tensorstead_agent_bind_host: 0.0.0.0
 tensorstead_agent_port: 8443
+# A second port that serves model bytes to peer agents during replication, so a
+# node-to-node copy encrypts on many cores instead of uvicorn's one event-loop
+# thread. Same certificate, same replication token; the manifest advertises it
+# and a peer that cannot reach it falls back to tensorstead_agent_port. Remove
+# the line to turn it off. Peers must be able to reach it.
+tensorstead_agent_content_port: 8444
 tensorstead_agent_model_store: /var/lib/tensorstead/models
 tensorstead_agent_image_store: /var/lib/tensorstead/images
 tensorstead_agent_state_dir: /var/lib/tensorstead/state
