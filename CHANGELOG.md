@@ -5,6 +5,36 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Changed
+- **Node-to-node model copies are no longer held to one CPU core.** Measured
+  between two DGX Sparks, a 56.7 GB copy ran at 13.1 Gbps end to end while the
+  fabric carried 107 Gbps of plain TCP and both NVMe drives sustained 8 GB/s or
+  more. The limit was the source agent: uvicorn encrypts every byte it sends on
+  its one event-loop thread, which sat at 92-100% of a core for the whole copy.
+  Agents can now serve model bytes on a second port, one worker thread per
+  connection, so the encryption spreads across cores. Between the same two
+  Sparks, a 24 GiB model copied at 10.3 and 11.0 Gbps without it and at 17.9
+  and 16.9 Gbps with it; the source's busiest thread went from 100% of a core
+  to under 40%.
+  - The next limit is the destination: it hashes each file in order on one
+    core (SHA-256, about 2.5 GB/s there), and a copy pulls files one after
+    another, so one hasher runs at a time.
+  - Off unless `tensorstead_agent_content_port` is set; the example group vars
+    set 8444. The manifest advertises the port and the destination pulls ranges
+    from it.
+  - Only `.../content/file` is served there, under the same replication token,
+    containment and `available` refusal, with the agent's own certificate.
+  - A destination that cannot reach the port falls back to the main port, and
+    an older source never advertises one, so agents can be upgraded one at a
+    time.
+
+### Added
+- `TENSORSTEAD_CONTENT_PORT`, `TENSORSTEAD_CONTENT_BIND_HOST`,
+  `TENSORSTEAD_AGENT_TLS_CERT` and `TENSORSTEAD_AGENT_TLS_KEY` in the agent's
+  environment, written by the agent role when the content port is set.
+
 ## [1.12.0] - 2026-10-24
 
 ### Changed

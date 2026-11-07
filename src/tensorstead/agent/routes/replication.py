@@ -12,6 +12,9 @@ Two endpoints with deliberately different trust roles:
   content, finer grained: ``.../content/manifest`` lists every path and size,
   and ``.../content/file?path=`` serves one file, honouring a byte ``Range``,
   so the destination can pull the model over several connections at once.
+  When the agent runs a content listener, the manifest also names its port and
+  the destination pulls ``.../content/file`` from there instead
+  (``agent/content_listener.py``).
 
 The content endpoint is **read-only and refuses to serve a replica that is not
 ``available``** — a staging copy can never propagate onward and be promoted by
@@ -29,19 +32,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from tensorstead.agent.app import require_management, require_replication
+from tensorstead.agent.replication import REFUSAL_STATUS as _STATUS_BY_CODE
 from tensorstead.agent.replication import ReplicationError, parse_byte_range
 
 router = APIRouter(prefix="/agent/v1", tags=["replication"])
-
-# Failure codes that are the caller's fault rather than this host's.
-_STATUS_BY_CODE = {
-    "not_found": 404,
-    "replica_not_available": 409,
-    "verification_failed": 422,
-    "artifact_too_large": 413,
-    "replication_unavailable": 503,
-    "replication_failed": 502,
-}
 
 
 class ReplicateModel(BaseModel):
@@ -168,7 +162,13 @@ def serve_manifest(model_id: str, request: Request) -> dict[str, Any]:
         entries = service.manifest(model_id)
     except ReplicationError as exc:
         raise _refusal(exc) from exc
-    return {"entries": [entry.as_json() for entry in entries]}
+    body: dict[str, Any] = {"entries": [entry.as_json() for entry in entries]}
+    # Read per request: a listener that stopped accepting stops being named.
+    listener = getattr(request.app.state, "content_listener", None)
+    port = getattr(listener, "port", None)
+    if port is not None:
+        body["content_port"] = port
+    return body
 
 
 @router.get(

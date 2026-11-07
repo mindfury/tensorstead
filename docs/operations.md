@@ -507,6 +507,23 @@ The digest also records the model's size. A model that already has a digest
 is verified rather than overwritten. If the bytes no longer match,
 `digest_mismatch` reports both values and leaves the record as it was.
 
+### The content port
+
+A copy's speed is set by the *source* agent's encryption. On the main port
+uvicorn encrypts every byte on one thread, which held a copy between two DGX
+Sparks to about 13 Gbps on a fabric that carries 107 Gbps. With
+`tensorstead_agent_content_port` set (8444 in the example group vars), each
+agent also listens there, serves model bytes one thread per connection, and
+names the port in its manifest; a destination pulls from it and the encryption
+spreads across cores.
+
+- It serves only `.../content/file`, with the agent's certificate and the
+  replication token. Management stays on `tensorstead_agent_port`.
+- Peers must be able to reach it. A destination that cannot reaches the
+  main port instead, after at most a 10 s connect timeout per connection:
+  slower, never failed.
+- Remove the variable and re-run `make deploy` to turn it off.
+
 ## Models from the Azure ML registry
 
 Besides Hugging Face, a model can come from the Azure ML public registry. No

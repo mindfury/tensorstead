@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -31,6 +32,9 @@ from tensorstead.agent.auth import AgentAuth
 from tensorstead.contracts.agent import AgentInfoResponse, ContainerEngineInfo
 from tensorstead.contracts.version import AGENT_VERSION, CONTRACT_VERSION
 from tensorstead.version import build_identity
+
+if TYPE_CHECKING:
+    from tensorstead.agent.content_listener import ContentListenerConfig
 
 
 def _env_flag(name: str) -> bool:
@@ -279,7 +283,50 @@ def build_agent_app_from_env() -> FastAPI:
         marker_dir=state_dir,
         model_store_path=str(model_store),
         image_store_path=image_store,
+        content_listener=content_listener_from_env(),
     )
+
+
+def content_listener_from_env() -> ContentListenerConfig | None:
+    """The content listener's configuration, or ``None`` when it is not enabled.
+
+    Off unless ``TENSORSTEAD_CONTENT_PORT`` is set. The certificate and key are
+    the ones uvicorn serves the main port with: uvicorn takes them as process
+    arguments, which the app never sees, so provisioning names them again here.
+    """
+    from tensorstead.agent.content_listener import ContentListenerConfig
+
+    raw = os.environ.get("TENSORSTEAD_CONTENT_PORT", "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or not 0 < int(raw) < 65536:
+        raise RuntimeError(f"TENSORSTEAD_CONTENT_PORT must be a port number, not {raw!r}")
+    return ContentListenerConfig(
+        host=os.environ.get("TENSORSTEAD_CONTENT_BIND_HOST", "").strip() or "0.0.0.0",  # noqa: S104 - as the main port
+        port=int(raw),
+        certfile=_required_environment_value("TENSORSTEAD_AGENT_TLS_CERT"),
+        keyfile=_required_environment_value("TENSORSTEAD_AGENT_TLS_KEY"),
+    )
+
+
+def _content_listener_lifespan(
+    config: ContentListenerConfig, replication_token: str
+) -> Callable[[FastAPI], Any]:
+    """Run the content listener for exactly as long as the app is served."""
+    from tensorstead.agent.content_listener import ContentListener
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        listener = ContentListener(config, service=app.state.replication, token=replication_token)
+        await listener.start()
+        app.state.content_listener = listener
+        try:
+            yield
+        finally:
+            app.state.content_listener = None
+            await listener.close()
+
+    return lifespan
 
 
 def _source_id(source: Any) -> str:
@@ -305,6 +352,7 @@ def build_agent_app(
     image_store_path: str | None = None,
     image_distribution: Any | None = None,
     peer_client: Any | None = None,
+    content_listener: ContentListenerConfig | None = None,
 ) -> FastAPI:
     """Create the node agent application.
 
@@ -315,7 +363,16 @@ def build_agent_app(
     The Phase 3 seams are injectable for tests: ``model_source``,
     ``container_engine``, ``service_manager``, and ``acquisition``. When
     omitted, production defaults are built lazily from the environment.
+
+    ``content_listener`` serves replication byte ranges on a second port while
+    the app is served; it needs the replication token, since it is that role's
+    route.
     """
+    lifespan = None
+    if content_listener is not None:
+        if not replication_token:
+            raise ValueError("the content listener needs a replication token")
+        lifespan = _content_listener_lifespan(content_listener, replication_token)
     # No docs or schema routes at all (CodeGuard CG-18): nothing reads them, and
     # FastAPI's defaults would serve them without the management token.
     app = FastAPI(
@@ -324,7 +381,9 @@ def build_agent_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
+    app.state.content_listener = None
     # Validation errors never echo the rejected input (CodeGuard CG-12).
     from fastapi.exceptions import RequestValidationError
 
