@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [Unreleased]
+## [1.13.0] - 2026-11-06
 
 ### Changed
 - **Node-to-node model copies are no longer held to one CPU core.** Measured
@@ -34,6 +34,11 @@ is versioned separately (`stead status` reports both).
 - `TENSORSTEAD_CONTENT_PORT`, `TENSORSTEAD_CONTENT_BIND_HOST`,
   `TENSORSTEAD_AGENT_TLS_CERT` and `TENSORSTEAD_AGENT_TLS_KEY` in the agent's
   environment, written by the agent role when the content port is set.
+
+### Security
+- Dependency updates (#63, #62): `fastapi` 0.162.0, `huggingface-hub` 2.3.0,
+  `ruff` 0.17.3, `pytest` 9.2.0, `pytest-asyncio` 1.4.1, and `astral-sh/setup-uv`
+  10.3.3.
 
 ## [1.12.0] - 2026-10-24
 
@@ -687,6 +692,7 @@ First public release.
 - `make build` produces a wheel with a build number and SHA-256 provenance
   manifest.
 
+[1.13.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.13.0
 [1.12.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.12.0
 [1.11.1]: https://github.com/mindfury/tensorstead/releases/tag/v1.11.1
 [1.11.0]: https://github.com/mindfury/tensorstead/releases/tag/v1.11.0
