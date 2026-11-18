@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-11-17
+
 ### Fixed
 - **A failed image copy now says why (#61).** When an agent holding an image
   could not export it for a peer, it answered `404 image_not_present`, even
