@@ -446,14 +446,31 @@ def serve_image_content(reference: str, request: Request) -> StreamingResponse:
     archive = store / f".serve-{reference.replace('/', '_').replace(':', '_')}.tar"
     # A holder that itself received the image by copy holds it only by id.
     local = resolve_local(engine, reference)
+    if local is None and getattr(engine, "image_digest", None) is not None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "image_not_present",
+                "message": f"this node does not hold {reference!r}",
+                "detail": {"reference": reference},
+            },
+        )
     target = local[0] if local is not None else reference
     try:
         engine.export_image(reference=target, archive_path=str(archive))
     except Exception as exc:
+        # The image is held, so this is the export failing, not an absence.
+        # Reporting it as 404 sent operators looking for a missing image
+        # while the daemon's own reason was discarded (#61).
         archive.unlink(missing_ok=True)
+        message = getattr(exc, "message", None) or str(exc)
         raise HTTPException(
-            status_code=404,
-            detail={"code": "image_not_present", "message": str(exc), "detail": {}},
+            status_code=500,
+            detail={
+                "code": "image_export_failed",
+                "message": f"could not export {reference!r}: {message}",
+                "detail": {"reference": reference, "exported_as": target},
+            },
         ) from exc
 
     def _stream() -> Any:

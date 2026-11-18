@@ -107,15 +107,15 @@ def issue_private_ca(directory: Path) -> tuple[Path, Path, Path]:
 class TLSPeerServer:
     """An HTTPS server standing in for a peer agent's content endpoint.
 
-    Serves ``body`` unconditionally on any path -- the caller under test
-    supplies the URL, and this only needs to be a real TLS endpoint behind
-    it, not a faithful route implementation.
+    Serves ``body`` with ``status`` unconditionally on any path -- the caller
+    under test supplies the URL, and this only needs to be a real TLS endpoint
+    behind it, not a faithful route implementation.
     """
 
-    def __init__(self, body: bytes, cert: Path, key: Path) -> None:
+    def __init__(self, body: bytes, cert: Path, key: Path, *, status: int = 200) -> None:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self) -> None:
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
