@@ -7,6 +7,25 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+### Fixed
+- **A multi-arch image pinned by digest can be copied to another node (#61).**
+  An arm64 node pulls only the arm64 side of an image such as NVIDIA's
+  TensorRT-LLM release, but `docker save` writes the whole image index. The
+  export check required every manifest the index names, so it refused the
+  archive (`2 blob(s) its manifest names are absent`) and the image could not
+  be staged on a second node. Now:
+  - In a multi-platform index, another platform's manifest or an attestation
+    manifest may be absent.
+  - The archive must carry a complete image for the exporting node's own
+    platform.
+  - The copy keeps the index digest, so a deployment naming
+    `repo@sha256:<index>` resolves on every node.
+- **The export check now looks inside per-platform manifests.** It confirmed
+  that they existed but never checked their config and layers, so a
+  multi-platform archive with no layers would have passed.
+- The "rebuild it with BuildKit" advice now appears only when layers or config
+  are missing. It was wrong for a pulled image.
+
 ## [1.13.1] - 2026-11-17
 
 ### Fixed

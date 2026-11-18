@@ -446,7 +446,31 @@ def render_dockerfile(
     return "\n".join(lines)
 
 
-def _archive_omits_its_own_blobs(archive_path: str) -> str | None:
+_MACHINE_ARCHITECTURES = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
+
+
+def _local_platform() -> tuple[str, str]:
+    """``(os, architecture)`` of this host, in OCI image-index terms."""
+    import platform as host
+
+    machine = host.machine().lower()
+    return "linux", _MACHINE_ARCHITECTURES.get(machine, machine)
+
+
+def _is_platform(declared: Any, platform: tuple[str, str]) -> bool:
+    if not isinstance(declared, dict):
+        return False
+    return (declared.get("os"), declared.get("architecture")) == platform
+
+
+def _is_attestation(descriptor: dict[str, Any]) -> bool:
+    annotations = descriptor.get("annotations") or {}
+    return annotations.get("vnd.docker.reference.type") == "attestation-manifest"
+
+
+def _archive_omits_its_own_blobs(
+    archive_path: str, *, platform: tuple[str, str] | None = None
+) -> str | None:
     """Name the content an archive's manifest declares but does not carry.
 
     Returns ``None`` when the archive is self-contained, otherwise a short
@@ -472,8 +496,16 @@ def _archive_omits_its_own_blobs(archive_path: str) -> str | None:
     index and manifests name must be present in the archive. That needs no
     comparison against the daemon, so it cannot drift from what the daemon
     thinks, and it is exactly the property "this archive is a whole image".
+
+    A multi-platform index is the one place where "every digest" is wrong: a
+    node holds only its own ``platform`` (default: this host's). There, the
+    archive must carry a whole image for that platform; other platforms and
+    attestations may be absent.
     """
     import tarfile
+
+    if platform is None:
+        platform = _local_platform()
 
     try:
         with tarfile.open(archive_path, "r:*") as tar:
@@ -495,6 +527,15 @@ def _archive_omits_its_own_blobs(archive_path: str) -> str | None:
                 # broken, so this declines to judge rather than guessing.
                 return None
 
+            def _check_image(manifest: dict[str, Any], missing: list[str]) -> None:
+                config_digest = (manifest.get("config") or {}).get("digest")
+                if config_digest and _blob(config_digest) not in present:
+                    missing.append(f"config {config_digest}")
+                for layer in manifest.get("layers", []):
+                    layer_digest = layer.get("digest", "")
+                    if layer_digest and _blob(layer_digest) not in present:
+                        missing.append(f"layer {layer_digest}")
+
             index = _read("index.json") or {}
             missing: list[str] = []
             for descriptor in index.get("manifests", []):
@@ -503,20 +544,30 @@ def _archive_omits_its_own_blobs(archive_path: str) -> str | None:
                     missing.append(f"manifest {digest or '<unnamed>'}")
                     continue
                 manifest = _read(_blob(digest)) or {}
-                # An index may point at another index (a multi-platform image).
-                # Its entries are checked on the next pass rather than treated
-                # as a config-bearing manifest.
-                for nested in manifest.get("manifests", []):
+                if "manifests" not in manifest:
+                    _check_image(manifest, missing)
+                    continue
+                # A multi-platform index. A node pulls only its own platform,
+                # and ``docker save`` writes the whole index regardless, so
+                # another platform's manifest -- and any attestation, which no
+                # platform needs in order to run -- may rightly be absent.
+                # What must be whole is this node's own platform: issue #61,
+                # where requiring every platform refused NGC's multi-arch
+                # images outright.
+                runnable_here = False
+                for nested in manifest["manifests"]:
+                    if _is_attestation(nested):
+                        continue
                     nested_digest = nested.get("digest", "")
+                    ours = _is_platform(nested.get("platform"), platform)
                     if not nested_digest or _blob(nested_digest) not in present:
-                        missing.append(f"manifest {nested_digest or '<unnamed>'}")
-                config_digest = (manifest.get("config") or {}).get("digest")
-                if config_digest and _blob(config_digest) not in present:
-                    missing.append(f"config {config_digest}")
-                for layer in manifest.get("layers", []):
-                    layer_digest = layer.get("digest", "")
-                    if layer_digest and _blob(layer_digest) not in present:
-                        missing.append(f"layer {layer_digest}")
+                        if ours or not nested.get("platform"):
+                            missing.append(f"manifest {nested_digest or '<unnamed>'}")
+                        continue
+                    _check_image(_read(_blob(nested_digest)) or {}, missing)
+                    runnable_here = runnable_here or ours
+                if not runnable_here:
+                    missing.append(f"manifest for {platform[0]}/{platform[1]}")
 
             if not missing:
                 return None
@@ -1063,10 +1114,17 @@ class DockerEngine:
         # destination to refuse an image whose fault is on this node.
         omission = _archive_omits_its_own_blobs(archive_path)
         if omission is not None:
+            # The BuildKit advice fits a classic-builder image, whose manifest
+            # names layers the content store never got. It is wrong for a
+            # pulled image missing a manifest, which is what #61 was told.
+            remedy = (
+                "rebuild it with BuildKit, which writes the content an export needs"
+                if ("layer " in omission or "config " in omission)
+                else "this node does not hold a whole image for its own platform"
+            )
             raise ImageBuildError(
                 f"exporting {reference!r} produced an archive that is not a whole image: "
-                f"{omission}. The image runs on this node but cannot be distributed from "
-                f"it; rebuild it with BuildKit, which writes the content an export needs",
+                f"{omission}. The image cannot be distributed from this node; {remedy}",
                 reference=reference,
             )
         return str(image.id)
