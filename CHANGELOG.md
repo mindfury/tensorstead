@@ -7,6 +7,8 @@ is versioned separately (`stead status` reports both).
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-11-17
+
 ### Fixed
 - **A multi-arch image pinned by digest can be copied to another node (#61).**
   An arm64 node pulls only the arm64 side of an image such as NVIDIA's
