@@ -877,10 +877,13 @@ class DeploymentService:
             elif origin.get("os_family") and target_os and origin.get("os_family") != target_os:
                 severity = "warning"
                 reason = f"os_family {origin.get('os_family')!r} != {target_os!r}"
-            elif origin.get("accelerator_model") and facts.get("accelerator_model"):
-                if origin.get("accelerator_model") != facts.get("accelerator_model"):
-                    severity = "note"
-                    reason = "accelerator_model differs"
+            elif (
+                origin.get("accelerator_model")
+                and facts.get("accelerator_model")
+                and origin.get("accelerator_model") != facts.get("accelerator_model")
+            ):
+                severity = "note"
+                reason = "accelerator_model differs"
             if severity is not None:
                 warnings.append(
                     {
