@@ -15,6 +15,7 @@ tells a destination where to fetch from; the transfer is agent to agent.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import ssl
@@ -41,6 +42,42 @@ def _max_transfer_bytes() -> int:
     if raw is None or not raw.strip():
         return _DEFAULT_MAX_TRANSFER_BYTES
     return int(raw)
+
+
+# A peer's refusal is untrusted input: read only this much of it, and keep
+# only this much of its message, so a misbehaving peer cannot flood the
+# operation record.
+_MAX_REFUSAL_BYTES = 16 * 1024
+_MAX_REFUSAL_MESSAGE_CHARS = 1000
+
+
+def _peer_refusal(response: Any) -> str:
+    """Describe a peer's error response by its status, code and message.
+
+    The bare status was all the operation record used to carry, so an export
+    the holder could not produce read as a 404 for an image it plainly held
+    (#61). The holder's own ``code`` and ``message`` say why.
+    """
+    body = b""
+    for chunk in response.iter_bytes():
+        body += chunk
+        if len(body) >= _MAX_REFUSAL_BYTES:
+            break
+    status = f"HTTP {response.status_code}"
+    try:
+        parsed = json.loads(body[:_MAX_REFUSAL_BYTES])
+    except ValueError:
+        return status
+    error = parsed.get("detail", parsed) if isinstance(parsed, dict) else None
+    if not isinstance(error, dict):
+        return status
+    code = error.get("code")
+    message = error.get("message")
+    if isinstance(code, str) and code:
+        status = f"{status} {code}"
+    if isinstance(message, str) and message:
+        status = f"{status}: {message[:_MAX_REFUSAL_MESSAGE_CHARS]}"
+    return status
 
 
 class ImageDistributionError(RuntimeError):
@@ -121,7 +158,12 @@ class ImageDistributionService:
                 client.stream("GET", url, headers=headers) as response,
                 staged.open("wb") as handle,
             ):
-                response.raise_for_status()
+                if response.is_error:
+                    raise ImageDistributionError(
+                        f"could not fetch {reference!r} from {source_endpoint}: "
+                        f"{_peer_refusal(response)}",
+                        reference=reference,
+                    )
                 for chunk in response.iter_bytes():
                     written += len(chunk)
                     if written > limit:

@@ -5,6 +5,22 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
+## [Unreleased]
+
+### Fixed
+- **A failed image copy now says why (#61).** When an agent holding an image
+  could not export it for a peer, it answered `404 image_not_present`, even
+  though it had just reported pulling that image. The destination then
+  recorded only the HTTP status. Now:
+  - The holder answers 404 only for an image it does not hold.
+  - A held image whose export fails returns 500 `image_export_failed` with the
+    daemon's reason.
+  - The destination reads the peer's `code` and `message` into the operation
+    record. It reads at most 16 KiB of the response and keeps at most 1,000
+    characters of the message, since the peer's response is untrusted input.
+  - This does not yet fix the export of multi-arch index-digest references
+    itself; it makes that failure diagnosable.
+
 ## [1.13.0] - 2026-11-17
 
 ### Changed
