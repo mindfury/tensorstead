@@ -159,20 +159,17 @@ product, and unrecorded. That is the workflow Tensorstead exists to replace.
 Run against both nodes. The whole sequence, in order:
 
 ```sh
-# 1. Record the spec (executes nothing), then build on each node that runs it.
+# 1. Record the spec (executes nothing), then build it once and copy it to
+#    every node that runs the deployment.
 stead buildspec set vllm-xgrammar --base '...' --step '...' --step '...'
-stead image build vllm-xgrammar --node spark-alpha.internal \
-  --reference local/vllm:26.07-xgrammar-0.2.1
-stead image build vllm-xgrammar --node spark-beta.internal \
+stead image build vllm-xgrammar \
+  --node spark-alpha.internal --node spark-beta.internal \
   --reference local/vllm:26.07-xgrammar-0.2.1
 
-# 2. Point the deployment at it. Pass the WHOLE runtime config — see below.
+# 2. Point the deployment at it. --config merges: name only what changes.
 stead deployment modify qwen36-27b --expect-revision 7 \
   --image local/vllm:26.07-xgrammar-0.2.1 \
-  --config tensor_parallel_size=1 --config max_model_len=262144 \
-  --config gpu_memory_utilization=0.4 --config quantization=modelopt \
-  --config reasoning_parser=qwen3 --config tool_call_parser=qwen3_xml \
-  --config enable_auto_tool_choice=true --config served_model_name=qwen36-27b
+  --config tool_call_parser=qwen3_xml
 
 # 3. Modify never restarts anything. Do it explicitly.
 stead deployment restart qwen36-27b
@@ -180,22 +177,26 @@ stead deployment restart qwen36-27b
 
 Three things that cost time, so they are written down:
 
-- **`--config` replaces the entire runtime config, it does not merge.** One
+- **Know whether you are patching or replacing the config.** When this repair
+  was first done, `--config` replaced the whole runtime config, and one
   `--config tool_call_parser=...` produced a revision that had lost
-  `gpu_memory_utilization`, `max_model_len`, and four other settings. Always
-  pass the full set, and read back the declared revision before restarting.
-  `deployment modify` changes no host state, so there is a free window in which
-  to check.
+  `gpu_memory_utilization`, `max_model_len`, and four other settings. `--config`
+  now merges at the key level and keeps every key you do not name;
+  `--replace-config` is the explicit, destructive form. The merge is per key,
+  so a nested value such as `extra_args` is still replaced as a whole. Read
+  back the declared revision (`deployment show`) before restarting:
+  `deployment modify` changes no host state, so there is a free window in
+  which to check.
 - **A new image may not be the whole repair.** With xgrammar fixed, tool calls
   returned 200 but produced no parsed `tool_calls`: the model emits Qwen's XML
   form and the deployments were set to `tool_call_parser: hermes`, which
   expects JSON. The parser had never been correct; the xgrammar fault simply
   failed earlier. Check that a fix reaches the *outcome* you wanted, not just
   that the previous error stopped appearing.
-- **Build on every node that runs the deployment.** The produce-once-and-
-  distribute is not implemented, so the same spec built on two nodes yields two
-  different image identifiers. Fine for a repair; not fine if you are relying
-  on identifiers matching across nodes.
+- **Build once, with every node named.** `image build` with `--node` repeated
+  builds on the first node and copies the produced image to the rest. Building
+  separately on each node yields a different image identifier per node, which
+  silently breaks digest comparison for a deployment that spans them.
 
 ### Runtime images for a DGX Spark (arm64, GB10)
 

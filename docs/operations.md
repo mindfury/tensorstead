@@ -128,6 +128,18 @@ stead deployment modify llama-70b --config max_model_len=16384
 stead deployment revisions llama-70b
 ```
 
+`--config` **merges** at the key level: only the keys you name change, and
+every other setting is kept. `--replace-config` replaces the whole runtime
+config map and drops every key you do not name; the two are mutually
+exclusive. Because the merge is per key, a nested value such as `extra_args`
+is replaced as a whole, so repeat any of its entries that should stay.
+`--expect-revision N` refuses the change if someone else has moved the
+deployment past revision N.
+
+Do not use modify to change which model a deployment serves. On a running
+deployment it is refused (`model_change_refused`); follow
+[model-swap.md](./model-swap.md) instead.
+
 Every accepted change **inserts a new numbered revision**. No revision is ever
 updated in place and none is ever deleted, so the full history of a deployment
 is inspectable forever. The deployment's id is stable across all of them.
@@ -140,7 +152,46 @@ choose when.
 stead deployment export llama-70b --revision 2 -o rev2.yaml
 ```
 
-Any revision can be exported, not only the current one.
+Any revision can be exported, not only the current one. An export can be
+turned back into a new deployment, which alters no host state:
+
+```bash
+stead deployment create --from-export rev2.yaml
+```
+
+### Renaming
+
+```bash
+stead deployment rename llama-70b llama-70b-prod
+```
+
+The id, the revisions, and what is serving are unchanged, and nothing
+restarts. A name another deployment holds is refused.
+
+## Reserving a node
+
+```bash
+stead node reserve spark-02 --reason "standalone benchmark outside Tensorstead"
+stead node unreserve spark-02
+```
+
+A reserved node refuses deployment create, modify, and start that target it
+(`node_reserved`). Reserving is a statement, not an action: nothing on the
+node changes and nothing already running there is stopped. Use it for a node
+carrying work Tensorstead cannot see, so a new deployment is not placed onto
+memory that is not really free.
+
+## Staging and tidying images
+
+```bash
+stead image pull 'nvcr.io/nvidia/vllm@sha256:...' --node spark-01 --node spark-02
+stead image reconcile            # or: stead image reconcile <node-id>
+```
+
+`image pull` puts a registry image on nodes before a planned start, so the
+download is not part of the downtime. It pulls from the registry once and
+copies node to node. `image reconcile` compares image records against what the
+nodes hold and removes records whose image is gone.
 
 ## What is retained
 
@@ -236,7 +287,7 @@ role as `/var/lib/tensorstead/credential-imports`). Place the secret file there
 on the coordinator host, then pass its name:
 
 ```bash
-sudo install -m 0640 -g projectx ./hf-token /var/lib/tensorstead/credential-imports/hf-token
+sudo install -m 0640 -g tensorstead ./hf-token /var/lib/tensorstead/credential-imports/hf-token
 stead credential set huggingface team --from-file hf-token
 ```
 
@@ -244,6 +295,33 @@ Anything outside that directory, a traversing name, or a path through a symlink
 is refused, so Tensorstead's own secrets (its env files, TLS keys and credential
 store) can never be re-imported as a credential. With the variable unset,
 `--from-file` is refused outright.
+
+## Code approvals
+
+Some runtime options load code from the model repository or relax container
+isolation: `trust_remote_code` (vLLM, SGLang, TensorRT-LLM) loads code, and
+`allow_io_uring` (vLLM) adds the io_uring syscalls to the container's seccomp
+profile. A deployment using one is refused (`code_execution_not_authorized`)
+unless a reviewed approval names the exact option, runtime, model revision and
+image digest. The coordinator and the agent both check it. These options cannot
+be passed through `extra_args`; vLLM and SGLang `extra_args` also refuse
+code-loading flags such as `--chat-template` and `--tool-parser-plugin`.
+
+Approvals are managed over the API (`/v1/code-approvals`) and MCP
+(`code_approval_create`, `code_approval_list`, `code_approval_delete`); there
+is no `stead` command for them. An approval needs:
+
+- `option`, `runtime_type`, `model_source_id` and `source_model_id`;
+- `model_revision`: the immutable 40- or 64-character hex revision, never a
+  tag;
+- `image_digest`: `sha256:...` of the runtime image;
+- `reason` and `approved_by`, both required.
+
+An approval stops matching when the deployment's model revision or image
+changes, so a new image needs a new approval. `approved_by` is recorded as
+stated, not authenticated: an approval is an operator attestation, not a
+second person's sign-off (see [ADR 0001](./adr/0001-trust-boundaries.md)).
+Deleting an approval removes its row.
 
 ## History
 
@@ -304,10 +382,13 @@ other hosts, so the token crossed the network in cleartext on every call.
 
 ### Upgrading a running installation
 
-`coordinator serve` still starts without TLS, and warns when it is asked to
-listen on an address other than loopback without it. That is deliberate: a new
-requirement should not strand an installation mid-upgrade. The warning names
-the exposure so an untidy state cannot be mistaken for a deliberate one.
+`coordinator serve` refuses to start on an address other than loopback unless
+it has both TLS (`--tls-cert`/`--tls-key`, or `TENSORSTEAD_TLS_CERT` and
+`TENSORSTEAD_TLS_KEY`) and a management token. `--insecure-dev-mode` never
+overrides that; it only permits a tokenless coordinator on loopback. Earlier
+releases warned and continued, so an installation that was still serving
+plain HTTP will not come back up until `make deploy` has installed the
+certificate.
 
 After deploying, update the local smoke profile's `TENSORSTEAD_SMOKE_API` to the
 `https://` form. `make readiness` additionally checks that the management port
@@ -499,7 +580,8 @@ Record one first, then repeat the acquire:
 ```sh
 stead model digest nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB
 stead operation show <operation id>       # hashing reads the whole tree: minutes
-stead model acquire huggingface nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB \
+stead model acquire --source huggingface \
+  --id nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB \
   --revision <revision> --node spark-471b.internal
 ```
 
@@ -530,12 +612,13 @@ Besides Hugging Face, a model can come from the Azure ML public registry. No
 Azure account is needed for models that registry publishes publicly:
 
 ```sh
-stead model acquire azureml azureml/MAI-Code-1.1-Flash-On-Device \
+stead model acquire --source azureml --id azureml/MAI-Code-1.1-Flash-On-Device \
   --revision 2 --node spark-471b.internal
 ```
 
 The id is `<registry>/<model name>`, and a version is required. The recorded
 revision is `2@<manifest digest>`. A later acquire refuses if the registry's
-files for that version have changed. Use `--file-selector` to fetch a subset.
+files for that version have changed. Use `--file` (repeatable glob) to fetch a
+subset.
 Copies to other nodes go node to node and are verified, the same as Hugging
 Face models.

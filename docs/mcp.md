@@ -1,7 +1,10 @@
 # Hosted MCP endpoint
 
-Ansible installs a separate, enabled `tensorstead-mcp` service beside every
-coordinator. It exposes the same management tools as local stdio MCP at:
+Ansible installs a separate `tensorstead-mcp` service beside every
+coordinator. Like the coordinator and agent units it is started by
+`make deploy` but not enabled at boot unless `tensorstead_services_enabled_at_boot`
+is true (see [operations](operations.md#cold-start-in-order)). It exposes the
+same management tools as local stdio MCP at:
 
 ```text
 https://<coordinator DNS name>:8090/mcp
