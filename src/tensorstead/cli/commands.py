@@ -1155,7 +1155,7 @@ def deployment_export(
         int | None,
         typer.Option(
             "--revision",
-            help="Immutable upstream revision to pin. Strongly preferred over a moving tag.",
+            help="Deployment revision number to export. Omit for the current revision.",
         ),
     ] = None,
     output: Annotated[
@@ -2051,7 +2051,10 @@ def credential_delete(
     source: Annotated[str, typer.Argument()],
     name: Annotated[str, typer.Argument()],
     promote: Annotated[
-        str | None, typer.Option("--promote", help="Promote the staged copy once verified.")
+        str | None,
+        typer.Option(
+            "--promote", help="When deleting the default, make this named credential the default."
+        ),
     ] = None,
     json_mode: Annotated[
         bool, typer.Option("--json", help="Emit JSON for machine consumption.")

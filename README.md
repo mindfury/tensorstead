@@ -192,12 +192,16 @@ playbook that changes a host.
 | [First deployment](docs/first-deployment.md) | Register a node, acquire a model, serve inference |
 | [CLI setup](docs/cli-setup.md) | Pointing the CLI at a coordinator; any connection failure |
 | [Ansible guide](ansible/README.md) | Installing the coordinator and agents on your hosts |
-| [Operations](docs/operations.md) | Lifecycle, reconcile, retention, credentials, TLS, reboots |
+| [Operations](docs/operations.md) | Lifecycle, reconcile, retention, credentials, code approvals, TLS, reboots |
+| [Model swap](docs/model-swap.md) | Serving a different model in place of a running one |
 | [Speech-to-text](docs/speech-to-text.md) | A local transcription endpoint, served by vLLM |
 | [Hosted MCP](docs/mcp.md) | Giving an AI agent access over the network |
 | [Builds](docs/builds.md) · [Release candidate](docs/release-candidate.md) | Producing, tracking, and approving a deployable wheel; building a runtime image |
 | [Smoke tests](docs/smoke-tests.md) | Read-only verification of a live installation |
 | [Not in v1](docs/not-in-v1.md) | Why rollback, cancellation, and scheduling are absent |
+| [ADR 0001](docs/adr/0001-trust-boundaries.md) | What approvals, registration, and the audit trail do and do not guarantee |
+| [Private CA](ansible/tls-private-ca.md) | Advanced: managing agent certificates yourself |
+| [SOP manual](docs/sop/README.md) | Step-by-step procedures for deploying and operating models, one task per file |
 
 ## Development
 

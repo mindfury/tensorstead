@@ -119,7 +119,7 @@ replay is provably safe. Without those, recovery is guessing with extra steps.
 
 Excluded by design rather than deferred, these are not roadmap items — they are
 the things a management tool accretes when nobody is holding the line on scope:
-RBAC, SSO, high availability, replication, consensus, message brokers,
+RBAC, SSO, high availability, coordinator (database) replication, consensus, message brokers,
 scheduling, autoscaling, and policy engines.
 
 Two are worth calling out because their absence is load-bearing:
@@ -127,6 +127,12 @@ Two are worth calling out because their absence is load-bearing:
 - **No scheduler.** The product never chooses a node for you. Placement is
   something the operator states, because on a two-appliance estate the operator
   knows things the scheduler never will.
-- **No capacity gating.** Resource readings are reported for your judgement and
-  **never block an operation**. A tool that refuses to deploy because it thinks
-  memory is short is a tool that is wrong at the worst moment.
+- **No capacity planning.** Resource readings are reported for your judgement
+  and do not choose or block placement. A tool that refuses to deploy because it
+  *estimates* memory is short is a tool that is wrong at the worst moment. The
+  one exception is a declared budget the node plainly cannot meet: a vLLM
+  `gpu_memory_utilization` or SGLang `mem_fraction_static` is a share of the
+  node's *total* memory, so the agent refuses a start (`insufficient_memory`)
+  when that share is larger than the memory free right now. Runtimes that
+  declare no such fraction (llama.cpp, TensorRT-LLM, ExLlama, TensorFold) are
+  not checked.

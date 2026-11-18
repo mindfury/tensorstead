@@ -5,7 +5,7 @@ This is external installation tooling for already-provisioned Linux hosts. It in
 ## What it does
 
 - Installs a controller-built Tensorstead wheel in `/opt/tensorstead/venv`.
-- Creates and enables `tensorstead-coordinator` and/or `tensorstead-agent` systemd units according to inventory membership.
+- Creates and starts `tensorstead-coordinator`, `tensorstead-mcp` and/or `tensorstead-agent` systemd units according to inventory membership. They are enabled at boot only when `tensorstead_services_enabled_at_boot` is true (default false; see `docs/operations.md`, "Cold start, in order").
 - Supports a coordinator host that is either separate from, or the same as, one or more agent hosts.
 - Checks Linux/systemd, Python, Docker, NVIDIA Container Toolkit, services, HTTP health, and coordinator-to-agent TLS reachability.
 
@@ -115,6 +115,10 @@ uv run ansible-lint ansible/
 The example inventory uses documentation-only IP addresses. Syntax checking does not contact them.
 
 ## Run later, when you choose to touch hosts
+
+The normal path is `make deploy` and `make readiness`, which read your
+inventory, settings, and Vault paths from `.tensorstead/deploy.mk` (see
+`docs/operations.md`, "Deploying a release"). The equivalent direct commands:
 
 ```sh
 uv run ansible-playbook -i /path/to/hosts.yml ansible/playbooks/site.yml --ask-vault-pass --ask-become-pass

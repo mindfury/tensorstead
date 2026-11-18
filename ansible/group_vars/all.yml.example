@@ -1,5 +1,6 @@
 ---
-# Copy to an ignored local file and set the wheel path produced by `uv build`.
+# Copy to an ignored local file and set the wheel and wheelhouse paths produced
+# by `make build` (never a bare `uv build`: see docs/builds.md).
 tensorstead_package_artifact: /absolute/path/on/controller/tensorstead-1.13.0-py3-none-any.whl
 tensorstead_package_wheelhouse: /absolute/path/on/controller/tensorstead-1.13.0-wheelhouse
 tensorstead_python_executable: /usr/bin/python3.12

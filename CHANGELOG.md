@@ -5,7 +5,7 @@ All notable changes to Tensorstead are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). The agent/coordinator wire contract
 is versioned separately (`stead status` reports both).
 
-## [1.13.0] - 2026-11-06
+## [1.13.0] - 2026-11-17
 
 ### Changed
 - **Node-to-node model copies are no longer held to one CPU core.** Measured
@@ -35,10 +35,28 @@ is versioned separately (`stead status` reports both).
   `TENSORSTEAD_AGENT_TLS_CERT` and `TENSORSTEAD_AGENT_TLS_KEY` in the agent's
   environment, written by the agent role when the content port is set.
 
+### Fixed
+- CLI help for `deployment export --revision` and `credential delete --promote`
+  described a different option (#70).
+
+### Documentation
+- **SOP manual** (`docs/sop/`): seventeen standalone procedures, from
+  installation to decommissioning, with an error-code reference and a
+  CLI-to-MCP tool map (#70).
+- Stale guidance corrected in `builds.md`, `operations.md`, `mcp.md`,
+  `not-in-v1.md` and the Ansible README. `--config` merges and
+  `--replace-config` replaces. Repeating `--node` on `image build` builds once
+  and copies. Off-loopback `serve` refuses to start without TLS and a token.
+  Services are not enabled at boot by default. The start-time
+  `insufficient_memory` check is now documented. Node reserve, rename,
+  create-from-export, image pull/reconcile and code approvals are now
+  documented (#70).
+
 ### Security
-- Dependency updates (#63, #62): `fastapi` 0.162.0, `huggingface-hub` 2.3.0,
-  `ruff` 0.17.3, `pytest` 9.2.0, `pytest-asyncio` 1.4.1, and `astral-sh/setup-uv`
-  10.3.3.
+- Dependency updates (#62, #63, #67, #68, #69): `fastapi` 0.162.4,
+  `huggingface-hub` 2.4.0, `pydantic` 2.14.3, `typer` 0.29.0, `ruff` 0.17.4,
+  `pytest` 9.2.0, `pytest-asyncio` 1.4.1.post1, `mypy` 2.4.1, `ansible-core`
+  2.21.6, `ansible-lint` 26.11.0, and `astral-sh/setup-uv` 10.3.3.
 
 ## [1.12.0] - 2026-10-24
 
