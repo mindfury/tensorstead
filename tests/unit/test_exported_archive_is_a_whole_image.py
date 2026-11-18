@@ -168,3 +168,140 @@ def test_something_that_is_not_an_archive_is_its_own_answer(tmp_path: Path) -> N
 
     assert omission is not None
     assert "could not be read" in omission
+
+
+# Multi-platform images (#61). A node pulls only its own platform, and ``docker
+# save`` writes the whole index regardless, so NGC's multi-arch images exported
+# from an arm64 node name an amd64 manifest the archive cannot carry. The layout
+# below is the one measured on nvcr.io/nvidia/tensorrt-llm/release@sha256:124da3f1.
+
+_ARM64 = ("linux", "arm64")
+_AMD64 = ("linux", "amd64")
+_ATTESTATION = {"vnd.docker.reference.type": "attestation-manifest"}
+
+
+def _image_blobs(
+    layers: list[bytes], *, drop_layer: bool = False
+) -> tuple[bytes, dict[str, bytes]]:
+    config = b'{"architecture":"arm64","os":"linux"}'
+    manifest = json.dumps(
+        {
+            "config": {"digest": _digest_of(config)},
+            "layers": [{"digest": _digest_of(each)} for each in layers],
+        }
+    ).encode()
+    blobs = {_digest_of(manifest): manifest, _digest_of(config): config}
+    for each in layers[:-1] if drop_layer else layers:
+        blobs[_digest_of(each)] = each
+    return manifest, blobs
+
+
+def _multi_platform(
+    path: Path,
+    *,
+    drop_arm64_layer: bool = False,
+    entries: list[dict] | None = None,
+    extra_blobs: dict[str, bytes] | None = None,
+) -> None:
+    """An index holding arm64 in full and naming amd64 and attestations."""
+    arm64, blobs = _image_blobs([b"arm-one", b"arm-two"], drop_layer=drop_arm64_layer)
+    amd64 = b'{"absent": "amd64 manifest"}'
+    attestation = json.dumps({"layers": [{"digest": _digest_of(b"in-toto statement")}]}).encode()
+    blobs[_digest_of(attestation)] = attestation  # present, its layer is not
+    if entries is None:
+        entries = [
+            {"digest": _digest_of(amd64), "platform": {"os": "linux", "architecture": "amd64"}},
+            {"digest": _digest_of(b"absent attestation"), "annotations": _ATTESTATION},
+            {"digest": _digest_of(arm64), "platform": {"os": "linux", "architecture": "arm64"}},
+            {"digest": _digest_of(attestation), "annotations": _ATTESTATION},
+        ]
+    index = json.dumps({"manifests": entries}).encode()
+    blobs[_digest_of(index)] = index
+    blobs.update(extra_blobs or {})
+    _write_archive(path, blobs=blobs, index={"manifests": [{"digest": _digest_of(index)}]})
+
+
+def test_a_partly_pulled_multi_platform_image_is_whole_for_its_own_platform(
+    tmp_path: Path,
+) -> None:
+    """The #61 archive: amd64 and one attestation absent, arm64 whole."""
+    archive = tmp_path / "ngc.tar"
+    _multi_platform(archive)
+
+    assert _archive_omits_its_own_blobs(str(archive), platform=_ARM64) is None
+
+
+def test_the_same_archive_is_refused_on_a_node_of_the_absent_platform(tmp_path: Path) -> None:
+    archive = tmp_path / "ngc.tar"
+    _multi_platform(archive)
+
+    omission = _archive_omits_its_own_blobs(str(archive), platform=_AMD64)
+
+    assert omission is not None
+    assert "manifest" in omission
+
+
+def test_a_platform_manifest_with_a_missing_layer_is_refused(tmp_path: Path) -> None:
+    """The gap the old check left: it confirmed a platform manifest existed and
+    never looked at the content behind it ("checked on the next pass", which
+    did not exist). A multi-platform archive with no layers passed."""
+    archive = tmp_path / "hollow-arm64.tar"
+    _multi_platform(archive, drop_arm64_layer=True)
+
+    omission = _archive_omits_its_own_blobs(str(archive), platform=_ARM64)
+
+    assert omission is not None
+    assert "layer" in omission
+
+
+def test_an_index_with_nothing_for_this_platform_is_refused(tmp_path: Path) -> None:
+    archive = tmp_path / "amd64-only.tar"
+    amd64, blobs = _image_blobs([b"amd-one"])
+    _multi_platform(
+        archive,
+        entries=[
+            {"digest": _digest_of(amd64), "platform": {"os": "linux", "architecture": "amd64"}}
+        ],
+        extra_blobs=blobs,
+    )
+
+    omission = _archive_omits_its_own_blobs(str(archive), platform=_ARM64)
+
+    assert omission is not None
+    assert "manifest for linux/arm64" in omission
+
+
+def test_an_absent_entry_that_declares_no_platform_is_refused(tmp_path: Path) -> None:
+    """Only another platform or an attestation may be absent; an entry that
+    says neither is content the archive should carry."""
+    archive = tmp_path / "unknown-entry.tar"
+    arm64, blobs = _image_blobs([b"arm-one"])
+    _multi_platform(
+        archive,
+        entries=[
+            {"digest": _digest_of(arm64), "platform": {"os": "linux", "architecture": "arm64"}},
+            {"digest": _digest_of(b"who knows")},
+        ],
+        extra_blobs=blobs,
+    )
+
+    omission = _archive_omits_its_own_blobs(str(archive), platform=_ARM64)
+
+    assert omission is not None
+    assert _digest_of(b"who knows") in omission
+
+
+@pytest.mark.parametrize(
+    ("machine", "expected"),
+    [("aarch64", _ARM64), ("arm64", _ARM64), ("x86_64", _AMD64), ("AMD64", _AMD64)],
+)
+def test_the_host_platform_uses_oci_architecture_names(
+    monkeypatch: pytest.MonkeyPatch, machine: str, expected: tuple[str, str]
+) -> None:
+    import platform as host
+
+    from tensorstead.agent.container_engine.docker_py import _local_platform
+
+    monkeypatch.setattr(host, "machine", lambda: machine)
+
+    assert _local_platform() == expected
