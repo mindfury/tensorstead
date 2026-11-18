@@ -57,6 +57,9 @@ is versioned separately (`stead status` reports both).
   `huggingface-hub` 2.4.0, `pydantic` 2.14.3, `typer` 0.29.0, `ruff` 0.17.4,
   `pytest` 9.2.0, `pytest-asyncio` 1.4.1.post1, `mypy` 2.4.1, `ansible-core`
   2.21.6, `ansible-lint` 26.11.0, and `astral-sh/setup-uv` 10.3.3.
+- `opentelemetry-api` 1.45.2 (Dependabot alert #31): fixes a denial of service
+  through quadratic-time `traceparent` parsing. Tensorstead does not use
+  OpenTelemetry itself; the package arrives through `fastapi` and `mcp`.
 
 ## [1.12.0] - 2026-10-24
 
